@@ -101,7 +101,7 @@
       "parameterCount": "82M",
       "quantization": "BF16",
       "languages": ["en-US", "en-GB", "es", "fr", "it", "pt", "ja", "hi", "cmn"],
-      "voices": ["af_heart", "af_bella", "af_nicole", "am_adam", "bf_emma", "bm_george", "ef_dora", "ff_siwis", "jf_alpha", "zm_yunxi"],
+      "voices": ["af_heart", "af_bella", "af_nicole", "am_adam", "bf_emma", "bm_george", "ef_dora", "ff_siwis", "jf_alpha", "zm_yunxi", "if_sara", "im_nicola", "hf_alpha", "hf_beta", "hm_omega", "hm_psi", "pf_dora", "pm_alex", "pm_santa"],
       "defaultVoice": "af_heart",
       "defaultLanguage": "en-US",
       "capabilities": {
@@ -126,7 +126,16 @@
         {"path": "voices/ef_dora.safetensors", "byteCount": 522320, "sha256": "13f6dfe8a498ce97a384186af045b586db6292869acbfde123a0fa2798229351"},
         {"path": "voices/ff_siwis.safetensors", "byteCount": 522320, "sha256": "5c659c9b9e12be28b98a4aa0cd6b1e66f359b6381ba5680264e9072945ac32b8"},
         {"path": "voices/jf_alpha.safetensors", "byteCount": 522320, "sha256": "455f78a6ebe633929cf314ce7c4a6b595ad1fb0ec7de6de7bc1d62d37e5264d2"},
-        {"path": "voices/zm_yunxi.safetensors", "byteCount": 522320, "sha256": "78d8bb5ba4a2ea75a7f22c6148214a7434b436db85dc791a2ddf2aa7f6cc6fab"}
+        {"path": "voices/zm_yunxi.safetensors", "byteCount": 522320, "sha256": "78d8bb5ba4a2ea75a7f22c6148214a7434b436db85dc791a2ddf2aa7f6cc6fab"},
+        {"path": "voices/if_sara.safetensors", "byteCount": 522320, "sha256": "2f3d092c8ba16f2007e8b234c9a55bdebec614a1e50143e41b39dd7f89fdb45b"},
+        {"path": "voices/im_nicola.safetensors", "byteCount": 522320, "sha256": "96b62f7d25c3e7efce4f2506beeaa9f63bcc73524c7b2862738c65433fe9ba16"},
+        {"path": "voices/hf_alpha.safetensors", "byteCount": 522320, "sha256": "e93355a43e6f57e8cfde96874008c858f1fb7fd8b65dd043114d451882cad3f6"},
+        {"path": "voices/hf_beta.safetensors", "byteCount": 522320, "sha256": "976ea52ba7edce5da049c41ef06a663f3807fd470d2ea5c359245dfc2fb00d66"},
+        {"path": "voices/hm_omega.safetensors", "byteCount": 522320, "sha256": "227f0c710d1169686bf617fac486e8496982e96cc01617a3acd3579db75dd126"},
+        {"path": "voices/hm_psi.safetensors", "byteCount": 522320, "sha256": "03efb26b99e78c8d40ade3217f9c9905f8f84bbad7f21f921e270c036b01144e"},
+        {"path": "voices/pf_dora.safetensors", "byteCount": 522320, "sha256": "9a8d587d60d0e041f593f7e7488943e7a6821f0136961bf0e554572e12c91c77"},
+        {"path": "voices/pm_alex.safetensors", "byteCount": 522320, "sha256": "bec864eaeb05cc1a6fa12777ad31faaae1b2ed6d5eb2a6f7370fb9cdc48e3e2f"},
+        {"path": "voices/pm_santa.safetensors", "byteCount": 522320, "sha256": "5009747fd93841c0865830be0f577ed50800b41b2122c469dedf51bb8311f78d"}
       ],
       "estimatedDiskBytes": 355000000,
       "estimatedPeakMemoryBytes": 1350000000,

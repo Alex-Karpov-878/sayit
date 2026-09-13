@@ -124,6 +124,16 @@ struct ModelCatalogTests {
         #expect(model.inferredLanguage(forPresetVoice: "ff_siwis") == "fr")
         #expect(model.inferredLanguage(forPresetVoice: "jf_alpha") == "ja")
         #expect(model.inferredLanguage(forPresetVoice: "zm_yunxi") == "cmn")
+        #expect(model.inferredLanguage(forPresetVoice: "if_sara") == "it")
+        #expect(model.inferredLanguage(forPresetVoice: "hf_alpha") == "hi")
+        #expect(model.inferredLanguage(forPresetVoice: "pf_dora") == "pt")
+        #expect(
+            Set(model.languages).isSubset(
+                of: Set(model.voices.compactMap {
+                    model.inferredLanguage(forPresetVoice: $0)
+                })
+            )
+        )
     }
 
     @Test("Generated and cloned voice capabilities are explicitly routed")
