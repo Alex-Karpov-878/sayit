@@ -3,6 +3,10 @@ import SayItProtocol
 
 extension ModelDescriptor {
     var serviceSnapshot: ModelSnapshot {
+        serviceSnapshot(availableVoices: nil)
+    }
+
+    func serviceSnapshot(availableVoices: [String]?) -> ModelSnapshot {
         ModelSnapshot(
             id: id.rawValue,
             displayName: displayName,
@@ -14,6 +18,7 @@ extension ModelDescriptor {
             quantization: quantization,
             languages: languages,
             voices: voices,
+            availableVoices: availableVoices,
             defaultVoice: defaultVoice,
             defaultLanguage: defaultLanguage,
             downloadByteCount: downloadByteCount,

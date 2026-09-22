@@ -6,6 +6,88 @@ import Testing
 
 @Suite("Model manager", .serialized)
 struct ModelManagerTests {
+    @Test("An existing model reveals new voices only after their files are installed")
+    func updatesInstalledVoices() async throws {
+        let fixture = try TemporaryBackendFixture(prefix: "SayItVoiceUpdateTests")
+        defer { fixture.remove() }
+        let config = Data(#"{"model_type":"qwen3_tts"}"#.utf8)
+        let weights = Data([1, 2, 3])
+        let oldVoice = Data([4, 5])
+        let newVoice = Data([6, 7])
+        let files = [
+            ("config.json", config),
+            ("model.safetensors", weights),
+            ("voices/test-voice.safetensors", oldVoice),
+            ("voices/new-voice.safetensors", newVoice)
+        ].map { path, data in
+            ModelFileDescriptor(
+                path: path, byteCount: Int64(data.count), sha256: sha256(data)
+            )
+        }
+        let oldModel = makeModel(
+            id: "voice-update", files: Array(files.dropLast())
+        )
+        let oldManager = ModelManager(
+            catalog: makeCatalog(models: [oldModel]),
+            directories: fixture.directories,
+            activeModelID: ModelID("voice-update")
+        )
+        let installStaging = fixture.directories.downloads.appending(
+            path: "voice-update-revision.partial"
+        )
+        for (path, data) in [
+            ("config.json", config),
+            ("model.safetensors", weights),
+            ("voices/test-voice.safetensors", oldVoice)
+        ] {
+            let url = installStaging.appending(path: path)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: url)
+        }
+        try await oldManager.install(oldModel.id)
+
+        let updatedModel = makeModel(
+            id: "voice-update", files: files,
+            voices: ["test-voice", "new-voice"]
+        )
+        let manager = ModelManager(
+            catalog: makeCatalog(models: [updatedModel]),
+            directories: fixture.directories,
+            activeModelID: updatedModel.id
+        )
+        #expect(await manager.installedModelIDs().contains(updatedModel.id))
+        #expect(await manager.availableVoices(for: updatedModel.id) == ["test-voice"])
+
+        let updateStaging = fixture.directories.downloads.appending(
+            path: "voice-update-revision.voices.partial"
+        )
+        let stagedVoice = updateStaging.appending(
+            path: "voices/new-voice.safetensors"
+        )
+        try FileManager.default.createDirectory(
+            at: stagedVoice.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data([8, 9]).write(to: stagedVoice)
+        await #expect(throws: ModelManagerError.self) {
+            try await manager.install(updatedModel.id)
+        }
+        #expect(await manager.availableVoices(for: updatedModel.id) == ["test-voice"])
+
+        try newVoice.write(to: stagedVoice)
+        try await manager.install(updatedModel.id)
+
+        #expect(await manager.availableVoices(for: updatedModel.id)
+            == ["test-voice", "new-voice"])
+        let installed = try #require(await manager.installedURL(for: updatedModel.id))
+        #expect(try Data(contentsOf: installed.appending(path: "model.safetensors"))
+            == weights)
+        try await manager.install(updatedModel.id)
+    }
+
     @Test("Upstream architecture aliases match their Say It model family")
     func compatibleUpstreamArchitectureAliases() {
         #expect(SupportedModelTypes.areCompatible("orpheus", "llama"))
@@ -498,7 +580,8 @@ private func makeModel(
     files: [ModelFileDescriptor] = [],
     estimatedDiskBytes: Int64 = 1,
     stability: ModelStability = .stable,
-    requiresReference: Bool = false
+    requiresReference: Bool = false,
+    voices: [String] = ["test-voice"]
 ) -> ModelDescriptor {
     ModelDescriptor(
         id: ModelID(id),
@@ -510,7 +593,7 @@ private func makeModel(
         parameterCount: "1",
         quantization: "none",
         languages: ["en"],
-        voices: ["test-voice"],
+        voices: voices,
         defaultVoice: "test-voice",
         defaultLanguage: "en",
         capabilities: ModelCapabilities(

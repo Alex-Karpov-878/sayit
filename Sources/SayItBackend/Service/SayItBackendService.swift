@@ -28,6 +28,7 @@ public final class SayItBackendService: SayItService {
 
     private var models: [ModelDescriptor]
     private var installedModelIDs: Set<ModelID> = []
+    private var availablePresetVoices: [ModelID: Set<String>] = [:]
     private var downloadProgress: ModelDownloadProgress?
     private var downloadTask: Task<Void, Never>?
     private var downloadSequence: UInt64 = 0
@@ -222,6 +223,7 @@ public final class SayItBackendService: SayItService {
     public func start() async {
         installedModelIDs = await modelManager.installedModelIDs()
         models = await modelManager.models()
+        await refreshAvailablePresetVoices()
         if !installedModelIDs.contains(ModelID(settingsStore.value.activeModelID)),
            let first = models.first(where: {
                installedModelIDs.contains($0.id) && $0.isSelectable
@@ -480,7 +482,14 @@ public final class SayItBackendService: SayItService {
             try await setVolume(volume)
             return .accepted
         case .models:
-            return .models(models.map(\.serviceSnapshot))
+            var snapshots: [ModelSnapshot] = []
+            for model in models {
+                let available = availablePresetVoices[model.id].map { installed in
+                    model.voices.filter(installed.contains)
+                }
+                snapshots.append(model.serviceSnapshot(availableVoices: available))
+            }
+            return .models(snapshots)
         case .selectModel(let id):
             try await selectModel(ModelID(id))
             return .accepted
@@ -1633,6 +1642,13 @@ public final class SayItBackendService: SayItService {
                     message: "The selected preset voice is unavailable for this model."
                 )
             }
+            if let available = availablePresetVoices[model.id],
+               !available.contains(voice) {
+                throw ServiceFailure(
+                    code: "voice.file_not_installed",
+                    message: "Update this model's voices in Settings before using this voice."
+                )
+            }
             return ResolvedVoice(
                 preset: voice,
                 mode: .standard,
@@ -2715,6 +2731,7 @@ public final class SayItBackendService: SayItService {
         try await modelManager.markDependenciesVerified(model.id)
         models = await modelManager.models()
         installedModelIDs = await modelManager.installedModelIDs()
+        await refreshAvailablePresetVoices()
         modelsRevision &+= 1
         revision &+= 1
     }
@@ -2775,6 +2792,7 @@ public final class SayItBackendService: SayItService {
         try await modelManager.remove(id)
         models = await modelManager.models()
         installedModelIDs = await modelManager.installedModelIDs()
+        await refreshAvailablePresetVoices()
         modelsRevision &+= 1
         revision &+= 1
     }
@@ -2832,6 +2850,7 @@ public final class SayItBackendService: SayItService {
         guard sequence == downloadSequence else { return }
         installedModelIDs = await modelManager.installedModelIDs()
         models = await modelManager.models()
+        await refreshAvailablePresetVoices()
         modelsRevision &+= 1
         downloadTask = nil
         downloadProgress = nil
@@ -2839,6 +2858,16 @@ public final class SayItBackendService: SayItService {
         modelInstallError = nil
         statusText = "Ready to speak"
         revision &+= 1
+    }
+
+    private func refreshAvailablePresetVoices() async {
+        var result: [ModelID: Set<String>] = [:]
+        for model in models where installedModelIDs.contains(model.id) {
+            if let voices = await modelManager.availableVoices(for: model.id) {
+                result[model.id] = Set(voices)
+            }
+        }
+        availablePresetVoices = result
     }
 
     private func finishCanceledInstall(
