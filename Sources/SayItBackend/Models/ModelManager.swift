@@ -64,7 +64,8 @@ actor ModelManager: ModelManaging {
             throw ModelManagerError.modelUnavailable
         }
         let hasInstalledSnapshot = rawInstallation(for: model) != nil
-        if hasInstalledSnapshot, installation(for: model) != nil {
+        if hasInstalledSnapshot, installation(for: model) != nil,
+           missingVoiceFiles(for: model).isEmpty {
             let staleStaging = directories.downloads.appending(
                 path: "\(model.id.rawValue)-\(model.revision).partial",
                 directoryHint: .isDirectory
@@ -75,7 +76,10 @@ actor ModelManager: ModelManaging {
 
         activeInstallID = id
         let task = Task {
-            if hasInstalledSnapshot {
+            if hasInstalledSnapshot,
+               installation(for: model) != nil {
+                try await self.performVoiceUpdate(model, progress: progress)
+            } else if hasInstalledSnapshot {
                 try await self.performDependencyRepair(
                     model,
                     progress: progress
@@ -154,6 +158,156 @@ actor ModelManager: ModelManaging {
 
     func installedModelIDs() -> Set<ModelID> {
         Set(modelList.compactMap { installation(for: $0)?.modelID })
+    }
+
+    func availableVoices(for id: ModelID) -> [String]? {
+        guard let model = modelList.first(where: { $0.id == id }),
+              let installation = installation(for: model) else {
+            return nil
+        }
+        let directory = directories.models.appending(path: installation.relativePath)
+        let record = directory.appending(path: "available-voices.json")
+        let recorded: Set<String>? = if FileManager.default.fileExists(
+            atPath: record.path
+        ) {
+            Set((try? Data(contentsOf: record)).flatMap {
+                try? JSONDecoder().decode([String].self, from: $0)
+            } ?? [])
+        } else {
+            nil
+        }
+        return model.voices.filter { voice in
+            if let recorded, !recorded.contains(voice) { return false }
+            guard let file = voiceFile(for: voice, in: model) else {
+                return true
+            }
+            return isValidExistingFile(
+                directory.appending(path: file.path),
+                descriptor: file
+            )
+        }
+    }
+
+    private func voiceFile(
+        for voice: String,
+        in model: ModelDescriptor
+    ) -> ModelFileDescriptor? {
+        model.files.first { $0.path == "voices/\(voice).safetensors" }
+    }
+
+    private func missingVoiceFiles(
+        for model: ModelDescriptor
+    ) -> [ModelFileDescriptor] {
+        guard installation(for: model) != nil else { return [] }
+        let available = Set(availableVoices(for: model.id) ?? [])
+        return model.voices.compactMap { voice in
+            guard let file = voiceFile(for: voice, in: model),
+                  !available.contains(voice) else { return nil }
+            return file
+        }
+    }
+
+    private func performVoiceUpdate(
+        _ model: ModelDescriptor,
+        progress: @escaping ProgressHandler
+    ) async throws {
+        let files = missingVoiceFiles(for: model)
+        guard !files.isEmpty,
+              let installation = installation(for: model) else { return }
+        let totalBytes = files.reduce(Int64(0)) { $0 + $1.byteCount }
+        try preflight(requiredBytes: totalBytes)
+        let directory = directories.models.appending(path: installation.relativePath)
+        let record = directory.appending(path: "available-voices.json")
+        if !FileManager.default.fileExists(atPath: record.path) {
+            let current = availableVoices(for: model.id) ?? []
+            try JSONEncoder().encode(current).write(to: record, options: .atomic)
+        }
+        let staging = directories.downloads.appending(
+            path: "\(model.id.rawValue)-\(model.revision).voices.partial",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(
+            at: staging,
+            withIntermediateDirectories: true
+        )
+        var completedBytes: Int64 = 0
+        await progress(ModelDownloadProgress(
+            modelID: model.id, state: .downloading,
+            completedBytes: 0, totalBytes: totalBytes, bytesPerSecond: 0
+        ))
+        for file in files {
+            try Task.checkCancellation()
+            if isValidExistingFile(
+                directory.appending(path: file.path), descriptor: file
+            ) {
+                completedBytes += file.byteCount
+                continue
+            }
+            let staged = staging.appending(path: file.path)
+            if !isValidExistingFile(staged, descriptor: file) {
+                try FileManager.default.createDirectory(
+                    at: staged.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                let downloaded = staged.appendingPathExtension("download")
+                let response = try await downloadFile(
+                    for: model.id,
+                    from: downloadURL(
+                        repository: model.repository,
+                        revision: model.revision,
+                        path: file.path
+                    ),
+                    to: downloaded,
+                    resumeDataURL: staged.appendingPathExtension("resume"),
+                    completedBytes: completedBytes,
+                    totalBytes: totalBytes,
+                    progress: progress
+                )
+                guard isSuccessful(response) else {
+                    throw ModelManagerError.invalidResponse
+                }
+                if FileManager.default.fileExists(atPath: staged.path) {
+                    try FileManager.default.removeItem(at: staged)
+                }
+                try FileManager.default.moveItem(at: downloaded, to: staged)
+            }
+            do {
+                try verify(staged, descriptor: file)
+            } catch {
+                try? FileManager.default.removeItem(at: staged)
+                throw error
+            }
+            completedBytes += file.byteCount
+            await progress(ModelDownloadProgress(
+                modelID: model.id, state: .downloading,
+                completedBytes: completedBytes, totalBytes: totalBytes,
+                bytesPerSecond: 0
+            ))
+        }
+        try Task.checkCancellation()
+        for file in files {
+            let destination = directory.appending(path: file.path)
+            if isValidExistingFile(destination, descriptor: file) {
+                continue
+            }
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.moveItem(
+                at: staging.appending(path: file.path), to: destination
+            )
+        }
+        try JSONEncoder().encode(model.voices).write(to: record, options: .atomic)
+        try? FileManager.default.removeItem(at: staging)
+        await progress(ModelDownloadProgress(
+            modelID: model.id, state: .installed,
+            completedBytes: totalBytes, totalBytes: totalBytes,
+            bytesPerSecond: 0
+        ))
     }
 
     func installedURL(for id: ModelID) -> URL? {

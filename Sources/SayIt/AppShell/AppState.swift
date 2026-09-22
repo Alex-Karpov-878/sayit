@@ -52,6 +52,7 @@ final class AppState {
 
     private(set) var models: [ModelDescriptor]
     private(set) var installedModelIDs: Set<ModelID> = []
+    private(set) var modelsWithVoiceUpdates: Set<ModelID> = []
     private(set) var downloadProgress: ModelDownloadProgress?
     private(set) var modelInstallError: (modelID: ModelID, message: String)?
     private(set) var requestedModelInstallID: ModelID?
@@ -1496,6 +1497,13 @@ final class AppState {
                 return
             }
             models = snapshots.map(\.descriptor)
+            modelsWithVoiceUpdates = Set(snapshots.compactMap { snapshot in
+                guard let available = snapshot.availableVoices,
+                      available.count < snapshot.voices.count else {
+                    return nil
+                }
+                return ModelID(snapshot.id)
+            })
             downloadByteCounts = Dictionary(
                 uniqueKeysWithValues: snapshots.map {
                     (ModelID($0.id), $0.downloadByteCount)

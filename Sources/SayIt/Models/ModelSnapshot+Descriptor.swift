@@ -13,7 +13,7 @@ extension ModelSnapshot {
             parameterCount: parameterCount,
             quantization: quantization,
             languages: languages,
-            voices: voices,
+            voices: availableVoices ?? voices,
             defaultVoice: defaultVoice,
             defaultLanguage: defaultLanguage,
             capabilities: ModelCapabilities(

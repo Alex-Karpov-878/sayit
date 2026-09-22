@@ -11,6 +11,7 @@ public struct ModelSnapshot: Codable, Identifiable, Sendable {
     public let quantization: String
     public let languages: [String]
     public let voices: [String]
+    public let availableVoices: [String]?
     public let defaultVoice: String?
     public let defaultLanguage: String?
     public let downloadByteCount: Int64
@@ -52,6 +53,7 @@ public struct ModelSnapshot: Codable, Identifiable, Sendable {
         quantization: String,
         languages: [String],
         voices: [String],
+        availableVoices: [String]? = nil,
         defaultVoice: String?,
         defaultLanguage: String?,
         downloadByteCount: Int64,
@@ -92,6 +94,7 @@ public struct ModelSnapshot: Codable, Identifiable, Sendable {
         self.quantization = quantization
         self.languages = languages
         self.voices = voices
+        self.availableVoices = availableVoices
         self.defaultVoice = defaultVoice
         self.defaultLanguage = defaultLanguage
         self.downloadByteCount = downloadByteCount

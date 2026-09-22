@@ -36,6 +36,34 @@ struct VoicesSettingsView: View {
                         settings.voiceSelections[model.id.rawValue] = selection
                     }
 
+                    if state.modelsWithVoiceUpdates.contains(model.id) {
+                        Button("Update Voices") {
+                            state.installModel(model.id)
+                        }
+                        .disabled(!state.isServiceOnline || state.modelInstallIsBusy)
+                        Text("Download the latest voices for \(model.displayName).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if let progress = state.downloadProgress,
+                           progress.modelID == model.id,
+                           ![.failed, .paused].contains(progress.state) {
+                            ProgressView(
+                                "Updating voices",
+                                value: Double(progress.completedBytes),
+                                total: Double(max(progress.totalBytes, 1))
+                            )
+                            Button("Cancel Voice Update") {
+                                state.cancelModelInstall()
+                            }
+                            .disabled(state.isCancelingModelInstall)
+                        }
+                        if let error = state.modelInstallError,
+                           error.modelID == model.id {
+                            Text(error.message)
+                                .foregroundStyle(.red)
+                        }
+                    }
+
                     if model.capabilities.voiceDescription,
                        selection == .automaticStable {
                         TextField(
@@ -250,9 +278,16 @@ struct VoicesSettingsView: View {
 
     private func synchronizeSelection() {
         guard let model = selectedModel else { return }
-        selection = settings.voiceSelection(for: model.id)
-            ?? model.defaultVoice.map(VoiceSelection.preset)
-            ?? .automaticStable
+        let saved = settings.voiceSelection(for: model.id)
+        if case .some(.preset(let voice)) = saved,
+           !model.voices.contains(voice) {
+            selection = model.defaultVoice.map(VoiceSelection.preset)
+                ?? .automaticStable
+        } else {
+            selection = saved
+                ?? model.defaultVoice.map(VoiceSelection.preset)
+                ?? .automaticStable
+        }
     }
 
     private func activateSelectedModel() {
