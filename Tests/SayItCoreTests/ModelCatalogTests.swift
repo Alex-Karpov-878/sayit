@@ -134,6 +134,15 @@ struct ModelCatalogTests {
                 })
             )
         )
+        let voiceFilePaths = Set(
+            model.files
+                .map(\.path)
+                .filter { $0.hasPrefix("voices/") && $0.hasSuffix(".safetensors") }
+        )
+        #expect(
+            Set(model.voices.map { "voices/\($0).safetensors" })
+                == voiceFilePaths
+        )
     }
 
     @Test("Generated and cloned voice capabilities are explicitly routed")
