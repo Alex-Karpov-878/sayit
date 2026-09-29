@@ -35,7 +35,10 @@ final class AppState {
     private var serviceRepairTask: Task<Void, Never>?
     private var automaticServiceRecovery = AutomaticServiceRecovery()
     private var isTerminating = false
-    private var selectionRequestTask: Task<Void, Never>?
+    private let selectionShortcutQueue = SelectionShortcutQueue()
+    private var selectionRequestTask: Task<Void, Never>? {
+        selectionShortcutQueue.task
+    }
     @ObservationIgnored
     private var menuActivityTask: Task<Void, Never>?
     private var lastModelsRevision: UInt64?
@@ -68,6 +71,12 @@ final class AppState {
     private(set) var voiceProfiles: [VoiceProfileSnapshot] = []
     private(set) var voiceStudio: VoiceStudioSnapshot?
     private(set) var httpAPIErrorMessage: String?
+    private(set) var remoteTTSErrorMessage: String?
+    private(set) var remoteTTSAPIKeyMessage: String?
+    @ObservationIgnored
+    private var remoteTTSSettingsTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var settingsWorkGeneration: UInt64 = 0
     private(set) var apiTokenErrorMessage: String?
     private(set) var oneTimeTokenSecret: String?
     private(set) var clipboardHasNewText = false
@@ -156,29 +165,41 @@ final class AppState {
 
     func speakSelectedText() {
         guard !isPreparingUpdate else { return }
-        guard selectionRequestTask == nil else { return }
         let targetApplication = NSWorkspace.shared.frontmostApplication
-        clearPresentedError()
-
-        selectionRequestTask = Task { [weak self] in
-            guard let self else { return }
-            defer { selectionRequestTask = nil }
+        selectionShortcutQueue.enqueue { [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            clearPresentedError()
             do {
-                let payload = try await SelectionRequestFlow.perform(
-                    readSelection: {
-                        try await self.selectionService.selectedPayload()
-                    },
-                    requestAuthorization: {
-                        try await self.selectionService
-                            .requestAuthorizationAndWait()
-                    },
-                    resumeTargetApplication: {
-                        try await self.restoreSelectionTarget(
-                            targetApplication
-                        )
-                    }
-                )
-                receive(payload)
+                if !isServiceOnline { await startup() }
+                let response = try await send(.snapshot)
+                try requireSuccess(response)
+                guard case .snapshot(let snapshot) = response else { return }
+                // A queued press must not capture a different application's text.
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier
+                    == targetApplication?.processIdentifier else {
+                    throw SelectionServiceError.frontmostApplicationUnavailable
+                }
+                let payload = try await SelectionRequestFlow.performShortcut {
+                    try await SelectionRequestFlow.perform(
+                        readSelection: {
+                            try await self.selectionService.selectedPayload()
+                        },
+                        requestAuthorization: {
+                            try await self.selectionService
+                                .requestAuthorizationAndWait()
+                        },
+                        resumeTargetApplication: {
+                            try await self.restoreSelectionTarget(targetApplication)
+                        }
+                    )
+                }
+                try Task.checkCancellation()
+                let result = try await send(.selectionShortcut(
+                    payload.map { submission(for: $0) },
+                    expectedJobID: snapshot.activeJob?.id,
+                    expectedText: snapshot.playback.spokenText
+                ))
+                try requireSuccess(result)
             } catch is CancellationError {
                 return
             } catch {
@@ -305,6 +326,10 @@ final class AppState {
 
     func receive(_ payload: TextSourcePayload) {
         guard !isPreparingUpdate else { return }
+        submit(submission(for: payload))
+    }
+
+    private func submission(for payload: TextSourcePayload) -> SpeechSubmission {
         let submission: SpeechSubmission
         if let html = payload.html {
             submission = makeSubmission(
@@ -327,7 +352,7 @@ final class AppState {
                 source: payload.source
             )
         }
-        submit(submission)
+        return submission
     }
 
     func confirmLongText() {
@@ -961,19 +986,93 @@ final class AppState {
     }
 
     func updateHTTP(enabled: Bool, port: Int) {
-        var snapshot = backendSettings
-        snapshot.httpEnabled = enabled
-        snapshot.httpPort = port
-        backendSettings = snapshot
         httpAPIErrorMessage = nil
-        Task {
+        enqueueRemoteTTSSettingsWork { [weak self] in
+            guard let self else { return }
+            var snapshot = self.backendSettings
+            snapshot.httpEnabled = enabled
+            snapshot.httpPort = port
             do {
-                let response = try await send(.updateSettings(snapshot))
-                try requireSuccess(response)
+                let response = try await self.send(.updateSettings(snapshot))
+                try self.requireSuccess(response)
+                self.backendSettings = snapshot
             } catch {
-                httpAPIErrorMessage = error.localizedDescription
+                self.httpAPIErrorMessage = error.localizedDescription
             }
         }
+    }
+
+    func updateRemoteTTS(
+        enabled: Bool,
+        baseURL: String,
+        model: String,
+        voice: String,
+        timeoutSeconds: Double
+    ) {
+        enqueueRemoteTTSSettingsWork { [weak self] in
+            guard let self else { return }
+            var snapshot = self.backendSettings
+            snapshot.remoteTTSEnabled = enabled
+            snapshot.remoteTTSBaseURL = baseURL
+            snapshot.remoteTTSModel = model
+            snapshot.remoteTTSVoice = voice
+            snapshot.remoteTTSTimeoutSeconds = timeoutSeconds
+            self.remoteTTSErrorMessage = nil
+            do {
+                let response = try await self.send(.updateRemoteTTS(snapshot))
+                try self.requireSuccess(response)
+                // Merge only remote fields so a concurrent ordinary settings
+                // update that landed during await is not overwritten.
+                var latest = self.backendSettings
+                latest.remoteTTSEnabled = snapshot.remoteTTSEnabled
+                latest.remoteTTSBaseURL = snapshot.remoteTTSBaseURL
+                latest.remoteTTSModel = snapshot.remoteTTSModel
+                latest.remoteTTSVoice = snapshot.remoteTTSVoice
+                latest.remoteTTSTimeoutSeconds = snapshot.remoteTTSTimeoutSeconds
+                self.backendSettings = latest
+            } catch {
+                self.remoteTTSErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func setRemoteTTSAPIKey(_ key: String) {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = backendSettings.remoteTTSBaseURL
+        enqueueRemoteTTSSettingsWork { [weak self] in
+            guard let self else { return }
+            self.remoteTTSAPIKeyMessage = nil
+            self.remoteTTSErrorMessage = nil
+            do {
+                let response = try await self.send(
+                    .setRemoteTTSAPIKey(trimmed.isEmpty ? nil : trimmed, endpoint: endpoint)
+                )
+                try self.requireSuccess(response)
+                self.remoteTTSAPIKeyMessage = trimmed.isEmpty
+                    ? "API key cleared."
+                    : "API key saved in the Keychain."
+            } catch {
+                self.remoteTTSErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func enqueueRemoteTTSSettingsWork(
+        _ operation: @escaping @MainActor () async -> Void
+    ) {
+        guard !isPreparingUpdate, !isTerminating else { return }
+        let generation = settingsWorkGeneration
+        let previous = remoteTTSSettingsTask
+        remoteTTSSettingsTask = Task { @MainActor in
+            _ = await previous?.value
+            guard !Task.isCancelled, generation == settingsWorkGeneration,
+                  !isPreparingUpdate, !isTerminating else { return }
+            await operation()
+        }
+    }
+
+    func clearRemoteTTSAPIKey() {
+        setRemoteTTSAPIKey("")
     }
 
     func restartBackgroundService() {
@@ -995,6 +1094,9 @@ final class AppState {
     func terminateBackgroundServiceForQuit() async {
         guard !isPreparedForUpdate else { return }
         isTerminating = true
+        settingsWorkGeneration &+= 1
+        settingsPushTask?.cancel()
+        remoteTTSSettingsTask?.cancel()
         serviceRepairTask?.cancel()
         await serviceRepairTask?.value
         serviceRepairTask = nil
@@ -1007,9 +1109,10 @@ final class AppState {
         await client.invalidate()
         await pollingTask?.value
         pollingTask = nil
-        selectionRequestTask?.cancel()
+        await remoteTTSSettingsTask?.value
+        remoteTTSSettingsTask = nil
+        selectionShortcutQueue.cancel()
         await selectionRequestTask?.value
-        selectionRequestTask = nil
         await selectionService.terminateForQuit()
         await backgroundService.terminateForQuit()
     }
@@ -1048,6 +1151,8 @@ final class AppState {
         guard !isPreparedForUpdate else { return }
         guard !isPreparingUpdate else { throw ServiceJobTermination.StopError.failed }
         isPreparingUpdate = true
+        settingsWorkGeneration &+= 1
+        remoteTTSSettingsTask?.cancel()
         backgroundService.isPreparingUpdate = true
         selectionService.isPreparingUpdate = true
         let deadline = Date.now.addingTimeInterval(15)
@@ -1062,21 +1167,21 @@ final class AppState {
         modelSelectionTask?.cancel()
         modelInstallRequestTask?.cancel()
         serviceRepairTask?.cancel()
-        selectionRequestTask?.cancel()
+        selectionShortcutQueue.cancel()
         await client.invalidate()
         // Capture tasks before clearing their slots; cancellation-aware XPC calls
         // are invalidated above so they cannot reconnect during preparation.
-        let pending = [menuActivityTask, pollingTask, settingsPushTask,
+        let pending = [menuActivityTask, pollingTask, settingsPushTask, remoteTTSSettingsTask,
                        modelSelectionTask, modelInstallRequestTask,
                        serviceRepairTask, selectionRequestTask].compactMap { $0 }
         try await UpdateTaskBarrier.wait(for: pending, until: deadline)
         menuActivityTask = nil
         pollingTask = nil
         settingsPushTask = nil
+        remoteTTSSettingsTask = nil
         modelSelectionTask = nil
         modelInstallRequestTask = nil
         serviceRepairTask = nil
-        selectionRequestTask = nil
         try await selectionService.terminateForUpdate(deadline: deadline)
         try await backgroundService.terminateForUpdate(deadline: deadline)
         isPreparedForUpdate = true
@@ -1572,16 +1677,24 @@ final class AppState {
         settingsPushTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(200))
             guard let self, !Task.isCancelled else { return }
-            let snapshot = self.settings.backendSnapshot(
-                httpEnabled: self.backendSettings.httpEnabled,
-                httpPort: self.backendSettings.httpPort
-            )
-            self.backendSettings = snapshot
-            do {
-                let response = try await self.send(.updateSettings(snapshot))
-                try self.requireSuccess(response)
-            } catch {
-                self.presentError(error.localizedDescription)
+            self.enqueueRemoteTTSSettingsWork { [weak self] in
+                guard let self else { return }
+                let snapshot = self.settings.backendSnapshot(
+                    httpEnabled: self.backendSettings.httpEnabled,
+                    httpPort: self.backendSettings.httpPort,
+                    remoteTTSEnabled: self.backendSettings.remoteTTSEnabled,
+                    remoteTTSBaseURL: self.backendSettings.remoteTTSBaseURL,
+                    remoteTTSModel: self.backendSettings.remoteTTSModel,
+                    remoteTTSVoice: self.backendSettings.remoteTTSVoice,
+                    remoteTTSTimeoutSeconds: self.backendSettings.remoteTTSTimeoutSeconds
+                )
+                do {
+                    let response = try await self.send(.updateSettings(snapshot))
+                    try self.requireSuccess(response)
+                    self.backendSettings = snapshot
+                } catch {
+                    self.presentError(error.localizedDescription)
+                }
             }
         }
     }

@@ -6,7 +6,8 @@ for the protections, changed defaults, and remaining trust boundaries before ins
 Private, local text-to-speech for Apple silicon Macs. Say It turns selected or
 copied text into speech with open models running through
 [MLX Audio](https://github.com/Blaizzy/mlx-audio)—your text and generated audio
-stay on your Mac.
+stay on your Mac by default. Optional remote TTS sends text only to the endpoint
+you enable in Advanced settings.
 
 <table>
   <tr>
@@ -23,7 +24,8 @@ stay on your Mac.
 
 - **Speak from anywhere.** Select text in another app and press the configurable
   selection hotkey, choose **Services → Say It**, or use the separate clipboard
-  hotkey.
+  hotkey. Press the selection shortcut again with the same text or no selection
+  to pause/resume; select different text to begin another reading.
 - **A native menu-bar player.** Read the clipboard, pause, seek, change playback
   speed, follow the spoken text, and revisit history without leaving your
   current app.
@@ -39,7 +41,8 @@ stay on your Mac.
   automatically unloaded after a configurable period of inactivity (ten
   minutes by default).
 - **Local by design.** Synthesis works offline after model download. There is no
-  analytics, cloud inference, or passive clipboard monitoring.
+  analytics or passive clipboard monitoring. Remote inference is optional and
+  disabled by default.
 - **Hear your coding agent work.** The bundled
   [Say It agent skill](skills/sayit/SKILL.md) provides live, hands-free spoken
   progress updates while an agent works.
@@ -65,6 +68,18 @@ Say It requires macOS 15 or later on an Apple silicon Mac.
 
 Both shortcuts can be changed in Settings. Say It queries the current selection
 or reads clipboard text only when you explicitly invoke the matching action.
+
+### Open the app window
+
+Open Say It from Spotlight, Finder, or the Dock to show its main window. The
+sidebar provides access to General, Voices, Models, Speech, and the other
+settings. Reopening the app brings back the same window and selected section.
+Closing the window keeps Say It running so its reading shortcuts remain
+available. Use **Say It → Quit** to stop the app.
+
+The menu-bar **Settings…** button and **Command–comma** open the same window.
+Local builds are named **Say It Local** and keep their settings and model
+library separate from the official app.
 
 ### Terminal
 
@@ -109,7 +124,10 @@ owns model downloads, synthesis, playback, and history. The app and CLI talk to
 that service over XPC. A narrowly scoped accessibility helper retrieves the
 frontmost app's selection only when requested. An optional, token-protected HTTP
 server exposes the same synthesis engine to other local apps through a
-versioned REST API bound to `127.0.0.1`.
+versioned REST API bound to `127.0.0.1`. Advanced settings can instead send the text you choose to speak (and any API
+key) to a user-configured OpenAI-compatible TTS endpoint on another machine.
+Returned audio plays on the Mac, speech history remains stored only on the Mac,
+and local MLX remains the default when that option is off.
 
 The synthesis layer is built primarily on
 [MLX Audio](https://github.com/Blaizzy/mlx-audio), with the native Swift
@@ -149,6 +167,9 @@ automatically.
 
 Tests run with `swift test`.
 
+Run launch, reopen, and onboarding UI checks with `./Scripts/test-windows.sh`
+on a macOS desktop with Xcode UI testing enabled.
+
 ## More screenshots
 
 [Voice cloning](public/resources/cloning.png)
@@ -164,3 +185,22 @@ Automatic and manual Sparkle updates are disabled in this fork so an upstream
 release cannot replace the security changes. Rebuild from reviewed source for
 updates. History saving is also off by default; enable it explicitly in History
 settings if desired. Existing saved history is retained until cleared.
+
+### Reviewed build plugins
+
+If Xcode asks to trust a pinned build plugin, review that plugin before allowing
+it. For a headless build after review, use
+`SAYIT_TRUST_REVIEWED_PLUGINS=1 ./Scripts/build-app.sh`. The same opt-in applies
+to `Scripts/test-windows.sh`. This opt-in bypasses
+Xcode's plugin fingerprint prompt; plugin execution remains sandboxed and
+dependency versions remain locked.
+
+### Local signing and UI tests
+
+The hardened app needs a valid Apple signing identity shared by its executable
+and embedded frameworks. An ad-hoc build can compile and pass signature-seal
+checks, but macOS library validation can reject it at launch. Do not disable
+library validation to bypass this requirement. For window tests, set
+`SAYIT_SIGN_IDENTITY` to your installed signing identity before running
+`Scripts/test-windows.sh`; the script builds with local identifiers and signs
+the app and test runner with that identity.

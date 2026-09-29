@@ -3,6 +3,73 @@ import SayItProtocol
 import Testing
 
 struct ProtocolRoundTripTests {
+
+    @Test
+    func remoteTTSSettingsAndAPIKeyCommandRoundTrip() throws {
+        var settings = BackendSettingsSnapshot()
+        settings.remoteTTSEnabled = true
+        settings.remoteTTSBaseURL = "https://gpu.example/v1"
+        settings.remoteTTSModel = "tts-1"
+        settings.remoteTTSVoice = "alloy"
+        settings.remoteTTSTimeoutSeconds = 90
+
+        let settingsData = try JSONEncoder().encode(settings)
+        let decodedSettings = try JSONDecoder().decode(
+            BackendSettingsSnapshot.self,
+            from: settingsData
+        )
+        #expect(decodedSettings.remoteTTSEnabled)
+        #expect(decodedSettings.remoteTTSBaseURL == "https://gpu.example/v1")
+        #expect(decodedSettings.remoteTTSModel == "tts-1")
+        #expect(decodedSettings.remoteTTSVoice == "alloy")
+        #expect(decodedSettings.remoteTTSTimeoutSeconds == 90)
+
+        let request = ServiceRequest(command: .setRemoteTTSAPIKey("secret", endpoint: "https://gpu.example/v1"))
+        let requestData = try JSONEncoder().encode(request)
+        let decodedRequest = try JSONDecoder().decode(
+            ServiceRequest.self,
+            from: requestData
+        )
+        guard case .setRemoteTTSAPIKey(let key, let endpoint) = decodedRequest.command else {
+            Issue.record("Expected setRemoteTTSAPIKey")
+            return
+        }
+        #expect(key == "secret")
+        #expect(endpoint == "https://gpu.example/v1")
+
+        let clearRequest = ServiceRequest(command: .setRemoteTTSAPIKey(nil, endpoint: "https://gpu.example/v1"))
+        let clearData = try JSONEncoder().encode(clearRequest)
+        let decodedClear = try JSONDecoder().decode(
+            ServiceRequest.self,
+            from: clearData
+        )
+        guard case .setRemoteTTSAPIKey(let cleared, _) = decodedClear.command else {
+            Issue.record("Expected setRemoteTTSAPIKey nil")
+            return
+        }
+        #expect(cleared == nil)
+    }
+
+    @Test("Selection shortcut context and optional text survive wire encoding", arguments: [true, false])
+    func selectionShortcutRoundTrip(hasSelection: Bool) throws {
+        let id = UUID()
+        let submission = hasSelection
+            ? SpeechSubmission(text: "Selected text", source: .selection) : nil
+        let original = ServiceCommand.selectionShortcut(
+            submission, expectedJobID: id, expectedText: "Current text"
+        )
+        let decoded = try SayItWireCodec.decode(
+            ServiceCommand.self, from: SayItWireCodec.encode(original)
+        )
+        guard case .selectionShortcut(let value, let expectedID, let text) = decoded else {
+            Issue.record("Expected selection shortcut command")
+            return
+        }
+        #expect(value?.text == submission?.text)
+        #expect(expectedID == id)
+        #expect(text == "Current text")
+    }
+
     @Test("Timing suffix metadata and optional audio ends survive wire encoding")
     func playbackTimingRoundTrip() throws {
         let chunk = PlaybackTextChunk(textStart: 100, textEnd: 200, audioStart: 12, audioEnd: 23)
@@ -75,7 +142,7 @@ struct ProtocolRoundTripTests {
             from: SayItWireCodec.encode(request)
         )
         #expect(decodedRequest == request)
-        #expect(SayItProtocolVersion.current == 8)
+        #expect(SayItProtocolVersion.current == 9)
     }
 
     @Test

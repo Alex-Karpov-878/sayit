@@ -67,7 +67,7 @@ struct AboutSettingsView: View {
                     Text("Acknowledgements")
                 } footer: {
                     Text(
-                        "Text and generated audio stay local. Network access is used only for model downloads and software updates. Say It and MLX Audio Swift are distributed under the MIT License."
+                        "Text and generated audio stay local by default. Enabling Advanced remote TTS sends text to your configured endpoint. Network access is also used for model downloads and software updates. Say It and MLX Audio Swift are distributed under the MIT License."
                     )
                 }
             }

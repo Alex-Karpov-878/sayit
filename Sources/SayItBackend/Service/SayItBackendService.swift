@@ -10,6 +10,11 @@ public final class SayItBackendService: SayItService {
     private let modelManager: ModelManager
     private let synthesizer: any BackendSpeechSynthesizing
     private let textCleaner = TextCleaner()
+    private let selectionIdentityCleaner = TextCleaner(options: .init(
+        stripMarkdown: false,
+        stripCodeBlocks: false,
+        stripSpecialCharacters: false
+    ))
     private let playback: any BackendPlaybackControlling
     private let history: HistoryStore
     private let audioArchive: AudioArchive
@@ -17,6 +22,8 @@ public final class SayItBackendService: SayItService {
     private let voiceProfiles: VoiceProfileStore
     private let diagnostics: DiagnosticRecorder
     private let huggingFaceTokenStore: KeychainTokenStore
+    private let remoteTTSAPIKeyStore: RemoteTTSAPIKeyStore
+    private let routingSynthesizer: RoutingSpeechSynthesizer?
     private let apiTokenStore = APITokenStore()
     private let settingsStore: BackendSettingsStore
     private let jobJournalStore: JobJournalStore
@@ -42,6 +49,7 @@ public final class SayItBackendService: SayItService {
     private var pendingJobs: [UUID: PendingSpeechJob] = [:]
     private var queuedJobIDs: [UUID] = []
     private var activeJobID: UUID?
+    private var playbackIsPaused = false
     private var activeRequest: SpeechRequest?
     private var playbackCompletionJobID: UUID?
     private var playbackCompletionContinuation: CheckedContinuation<
@@ -162,6 +170,7 @@ public final class SayItBackendService: SayItService {
         let history = try HistoryStore(directories: directories)
         let voiceProfiles = VoiceProfileStore(directories: directories)
         let tokenStore = KeychainTokenStore()
+        let remoteTTSAPIKeyStore = RemoteTTSAPIKeyStore()
         let manager = modelManagerOverride ?? ModelManager(
             catalog: catalog,
             directories: directories,
@@ -177,17 +186,29 @@ public final class SayItBackendService: SayItService {
         self.history = history
         self.voiceProfiles = voiceProfiles
         huggingFaceTokenStore = tokenStore
+        self.remoteTTSAPIKeyStore = remoteTTSAPIKeyStore
         modelManager = manager
         models = catalog.models
         let resolvedSynthesizer: any BackendSpeechSynthesizing
+        let resolvedRouting: RoutingSpeechSynthesizer?
         if let synthesizer {
             resolvedSynthesizer = synthesizer
+            resolvedRouting = nil
         } else {
-            resolvedSynthesizer = SynthesisActor { id in
+            let local = SynthesisActor { id in
                 await manager.installedURL(for: id)
             }
+            let remote = OpenAICompatibleSpeechSynthesizer(
+                apiKeyProvider: { endpoint in
+                    try await remoteTTSAPIKeyStore.token(for: endpoint)
+                }
+            )
+            let routing = RoutingSpeechSynthesizer(local: local, remote: remote)
+            resolvedSynthesizer = routing
+            resolvedRouting = routing
         }
         self.synthesizer = resolvedSynthesizer
+        self.routingSynthesizer = resolvedRouting
         audioArchive = AudioArchive(directory: directories.historyAudio)
         voiceAudioArchive = AudioArchive(directory: directories.voiceDrafts)
         diagnostics = DiagnosticRecorder(
@@ -221,6 +242,11 @@ public final class SayItBackendService: SayItService {
     }
 
     public func start() async {
+        if let routingSynthesizer {
+            await routingSynthesizer.updateRemoteConfiguration(
+                Self.remoteTTSConfiguration(from: settingsStore.value)
+            )
+        }
         installedModelIDs = await modelManager.installedModelIDs()
         models = await modelManager.models()
         await refreshAvailablePresetVoices()
@@ -439,6 +465,10 @@ public final class SayItBackendService: SayItService {
             )
         case .submit(let submission):
             return .job(try await submit(submission))
+        case .selectionShortcut(let submission, let expectedJobID, let expectedText):
+            return try await handleSelectionShortcut(
+                submission, expectedJobID: expectedJobID, expectedText: expectedText
+            )
         case .jobs:
             return .jobs(jobOrder.compactMap { jobsByID[$0] })
         case .confirmJob(let id):
@@ -448,14 +478,10 @@ public final class SayItBackendService: SayItService {
             await cancelJob(id)
             return .accepted
         case .play:
-            playback.play()
-            updateActiveJobState(.playing)
-            revision &+= 1
+            resumePlayback()
             return .accepted
         case .pause:
-            playback.pause()
-            updateActiveJobState(.paused)
-            revision &+= 1
+            pausePlayback()
             return .accepted
         case .clear:
             await cancelActiveJob()
@@ -612,6 +638,12 @@ public final class SayItBackendService: SayItService {
         case .updateSettings(let settings):
             try await updateSettings(settings)
             return .accepted
+        case .updateRemoteTTS(let settings):
+            try await updateSettings(settings, remoteOnly: true)
+            return .accepted
+        case .setRemoteTTSAPIKey(let key, let endpoint):
+            try await setRemoteTTSAPIKey(key, expectedEndpoint: endpoint)
+            return .accepted
         case .tokens:
             return .tokens(try await apiTokenStore.list())
         case .createToken(let name, let scopes):
@@ -637,6 +669,13 @@ public final class SayItBackendService: SayItService {
     private func startVoiceDiscovery(
         _ request: VoiceDiscoveryRequest
     ) throws -> VoiceStudioSnapshot {
+        if settingsStore.value.remoteTTSEnabled {
+            throw ServiceFailure(
+                code: "remote_tts.voice_studio_unavailable",
+                message: "Disable remote TTS in Advanced settings before using Voice Studio."
+            )
+        }
+
         guard !modelSwitchIsPending else {
             throw ServiceFailure(
                 code: "model.switch_in_progress",
@@ -841,6 +880,13 @@ public final class SayItBackendService: SayItService {
     private func startVoiceClone(
         _ request: VoiceCloneRequest
     ) throws -> VoiceStudioSnapshot {
+        if settingsStore.value.remoteTTSEnabled {
+            throw ServiceFailure(
+                code: "remote_tts.voice_studio_unavailable",
+                message: "Disable remote TTS in Advanced settings before using Voice Studio."
+            )
+        }
+
         guard !modelSwitchIsPending else {
             throw ServiceFailure(
                 code: "model.switch_in_progress",
@@ -1462,7 +1508,96 @@ public final class SayItBackendService: SayItService {
         )
     }
 
-    private func submit(_ submission: SpeechSubmission) async throws -> SpeechJob {
+    private static func selectionIdentity(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    private func selectionIdentity(
+        for submission: SpeechSubmission
+    ) async throws -> String {
+        if submission.inputFormat == .plainText || submission.inputFormat == .markdown {
+            return Self.selectionIdentity(submission.text)
+        }
+        let cleaned = try await selectionIdentityCleaner.ingest(payload(for: submission))
+        return Self.selectionIdentity(cleaned.text)
+    }
+
+    private func handleSelectionShortcut(
+        _ submission: SpeechSubmission?,
+        expectedJobID: UUID?,
+        expectedText: String
+    ) async throws -> ServiceResponse {
+        let selectedText: String
+        if let submission {
+            selectedText = try await selectionIdentity(for: submission)
+        } else {
+            selectedText = ""
+        }
+        // Representation extraction can suspend; validate the capture context after it.
+        guard activeJobID == expectedJobID,
+              activeJobID != nil || playback.spokenText == expectedText else {
+            return .accepted
+        }
+        let pending = activeJobID.flatMap { pendingJobs[$0] }
+        let currentText = pending?.selectionIdentity
+            ?? pending?.cleanedText?.text
+            ?? pending?.submission.text
+            ?? playback.spokenText
+        let hasPlayback = activeJobID != nil
+            || [.preparing, .buffering, .playing, .paused].contains(playback.state)
+        if hasPlayback,
+           selectedText.isEmpty || selectedText == Self.selectionIdentity(currentText) {
+            if playbackIsPaused || playback.state == .paused {
+                resumePlayback()
+            } else {
+                pausePlayback()
+            }
+            return .accepted
+        }
+        guard let submission, !selectedText.isEmpty else {
+            throw ServiceFailure(
+                code: "selection.no_selection",
+                message: "No readable text is selected in the frontmost app."
+            )
+        }
+        // This command is a selection action, never an enqueue operation.
+        return .job(try await submit(
+            submission, interruptCurrent: true, selectionIdentity: selectedText
+        ))
+    }
+
+    private func pausePlayback() {
+        guard activeJobID != nil
+            || [.preparing, .buffering, .playing, .paused].contains(playback.state) else {
+            return
+        }
+        playbackIsPaused = true
+        playback.pause()
+        updateActiveJobState(.paused)
+        statusText = "Paused"
+        revision &+= 1
+    }
+
+    private func resumePlayback() {
+        playbackIsPaused = false
+        if let id = activeJobID, pendingJobs[id]?.cleanedText == nil {
+            updateJob(id, state: .parsing, progress: 0.02)
+            statusText = "Cleaning text"
+            revision &+= 1
+            return
+        }
+        playback.play()
+        let state: SpeechJobState = playback.state == .playing ? .playing : .buffering
+        updateActiveJobState(state)
+        statusText = playback.state == .playing ? "Playing" : "Preparing speech"
+        revision &+= 1
+    }
+
+    private func submit(
+        _ submission: SpeechSubmission,
+        interruptCurrent: Bool = false,
+        selectionIdentity: String? = nil
+    ) async throws -> SpeechJob {
         guard !modelSwitchIsPending else {
             throw ServiceFailure(
                 code: "model.switch_in_progress",
@@ -1490,7 +1625,9 @@ public final class SayItBackendService: SayItService {
             )
         }
 
-        switch submission.queuePolicy {
+        let queuePolicy: QueuePolicy = interruptCurrent
+            ? .interruptCurrent : submission.queuePolicy
+        switch queuePolicy {
         case .enqueue:
             break
         case .interruptCurrent:
@@ -1506,9 +1643,13 @@ public final class SayItBackendService: SayItService {
         jobOrder.insert(job.id, at: 0)
         pendingJobs[job.id] = PendingSpeechJob(
             submission: submission,
-            cleanedText: nil
+            cleanedText: nil,
+            selectionIdentity: selectionIdentity ?? (
+                [.plainText, .markdown].contains(submission.inputFormat)
+                    ? Self.selectionIdentity(submission.text) : nil
+            )
         )
-        if submission.queuePolicy == .interruptCurrent {
+        if queuePolicy == .interruptCurrent {
             queuedJobIDs.insert(job.id, at: 0)
         } else {
             queuedJobIDs.append(job.id)
@@ -1529,6 +1670,7 @@ public final class SayItBackendService: SayItService {
         }
         queuedJobIDs.removeFirst()
         activeJobID = id
+        playbackIsPaused = false
         persistJobJournal()
         jobTask = Task { [weak self] in
             await self?.processJob(id)
@@ -1575,6 +1717,7 @@ public final class SayItBackendService: SayItService {
             persistJobJournal()
             if cleaned.requiresLongTextConfirmation,
                !pending.submission.permitsLongText {
+                playbackIsPaused = false
                 updateJob(id, state: .awaitingConfirmation, progress: 0.05)
                 activeJobID = nil
                 jobTask = nil
@@ -1723,52 +1866,83 @@ public final class SayItBackendService: SayItService {
         submission: SpeechSubmission
     ) async throws {
         let settings = settingsStore.value
-        let requestedModelID = ModelID(submission.modelID ?? settings.activeModelID)
-        guard let model = models.first(where: { $0.id == requestedModelID }) else {
-            throw ServiceFailure(
-                code: "model.not_found",
-                message: "The requested speech model was not found."
+        let model: ModelDescriptor
+        if settings.remoteTTSEnabled {
+            try validateRemoteTTSSettings(settings)
+            model = RemoteTTSConfiguration.descriptor(
+                model: settings.remoteTTSModel,
+                voice: submission.voice ?? settings.remoteTTSVoice,
+                endpoint: try Self.remoteTTSConfiguration(from: settings).speechEndpointURL()
             )
-        }
-        guard installedModelIDs.contains(model.id) else {
-            throw ServiceFailure(
-                code: "model.not_installed",
-                message: "Install \(model.displayName) before speaking."
-            )
+        } else {
+            let requestedModelID = ModelID(submission.modelID ?? settings.activeModelID)
+            guard let installed = models.first(where: { $0.id == requestedModelID }) else {
+                throw ServiceFailure(code: "model.not_found", message: "The requested speech model was not found.")
+            }
+            guard installedModelIDs.contains(installed.id) else {
+                throw ServiceFailure(code: "model.not_installed", message: "Install \(installed.displayName) before speaking.")
+            }
+            model = installed
         }
 
         let pace = closestSpeakingPace(
             to: submission.speakingPace ?? settings.speakingPace
         )
-        let resolvedVoice = try resolveVoice(
-            submission: submission,
-            settings: settings,
-            model: model
-        )
-        let voiceDescription = model.capabilities.voiceDescription
-            ? resolvedVoice.preset
-                ?? submission.voiceDescription
-                ?? nonEmpty(settings.voiceDescription)
-            : submission.voiceDescription
-                ?? nonEmpty(settings.voiceDescription)
-        let request = SpeechRequest(
-            id: id,
-            cleanedText: cleaned,
-            model: model,
-            voice: resolvedVoice.preset,
-            language: submission.language
-                ?? model.inferredLanguage(forPresetVoice: resolvedVoice.preset)
-                ?? nonEmpty(settings.activeLanguage)
-                ?? model.defaultLanguage,
-            voiceDescription: voiceDescription,
-            voiceMode: resolvedVoice.mode,
-            voiceReference: resolvedVoice.reference,
-            voiceProfileID: resolvedVoice.profileID,
-            voiceProfileName: resolvedVoice.profileName,
-            voiceTuning: resolvedVoice.tuning,
-            speakingPace: model.supportsNativeSpeakingPace ? pace : .natural,
-            source: submission.source.triggerSource
-        )
+        let request: SpeechRequest
+        if settings.remoteTTSEnabled {
+            // App submissions always attach a local voiceSelection. Remote mode
+            // uses only an explicit voice string or the Advanced remote voice.
+            let remoteVoice = submission.voice.flatMap(nonEmpty)
+                ?? nonEmpty(settings.remoteTTSVoice)
+            request = SpeechRequest(
+                id: id,
+                cleanedText: cleaned,
+                model: model,
+                voice: remoteVoice,
+                language: submission.language
+                    ?? nonEmpty(settings.activeLanguage)
+                    ?? model.defaultLanguage,
+                voiceDescription: submission.voiceDescription
+                    ?? nonEmpty(settings.voiceDescription),
+                voiceMode: .standard,
+                voiceReference: nil,
+                voiceProfileID: nil,
+                voiceProfileName: remoteVoice,
+                voiceTuning: nil,
+                speakingPace: pace,
+                source: submission.source.triggerSource
+            )
+        } else {
+            let resolvedVoice = try resolveVoice(
+                submission: submission,
+                settings: settings,
+                model: model
+            )
+            let voiceDescription = model.capabilities.voiceDescription
+                ? resolvedVoice.preset
+                    ?? submission.voiceDescription
+                    ?? nonEmpty(settings.voiceDescription)
+                : submission.voiceDescription
+                    ?? nonEmpty(settings.voiceDescription)
+            request = SpeechRequest(
+                id: id,
+                cleanedText: cleaned,
+                model: model,
+                voice: resolvedVoice.preset,
+                language: submission.language
+                    ?? model.inferredLanguage(forPresetVoice: resolvedVoice.preset)
+                    ?? nonEmpty(settings.activeLanguage)
+                    ?? model.defaultLanguage,
+                voiceDescription: voiceDescription,
+                voiceMode: resolvedVoice.mode,
+                voiceReference: resolvedVoice.reference,
+                voiceProfileID: resolvedVoice.profileID,
+                voiceProfileName: resolvedVoice.profileName,
+                voiceTuning: resolvedVoice.tuning,
+                speakingPace: model.supportsNativeSpeakingPace ? pace : .natural,
+                source: submission.source.triggerSource
+            )
+        }
         activeRequest = request
         if submission.source != .preview, settings.historyEnabled {
             try history.begin(request)
@@ -1787,6 +1961,7 @@ public final class SayItBackendService: SayItService {
                 / request.speakingPace.rawValue,
             modelID: request.model.id.rawValue
         )
+        if playbackIsPaused { playback.pause() }
         playback.setSpokenText(cleaned.text)
         spokenTextCharacterCount = cleaned.characterCount
         lastRecordedTextEnd = 0
@@ -1831,6 +2006,7 @@ public final class SayItBackendService: SayItService {
         _ event: SynthesisEvent,
         request: SpeechRequest
     ) async throws {
+        guard activeJobID == request.id else { throw CancellationError() }
         switch event {
         case .loadingModel:
             statusText = "Loading \(request.model.displayName)"
@@ -1847,8 +2023,9 @@ public final class SayItBackendService: SayItService {
             let revisionBeforeAudio = revision
             flushPendingSpokenChunk(speechStartOffset: chunk.speechStartOffset)
             try playback.enqueue(chunk)
+            if playbackIsPaused { playback.pause() }
             spokenAudioCursor = playback.generatedDuration
-            if playback.shouldStartWhenBuffered {
+            if !playbackIsPaused, playback.shouldStartWhenBuffered {
                 playback.play()
                 statusText = "Playing"
                 updateJob(request.id, state: .playing, progress: playbackProgress)
@@ -1862,7 +2039,7 @@ public final class SayItBackendService: SayItService {
         case .metrics(let metrics):
             finalizeSpokenChunk(audioEnd: playback.generatedDuration + metrics.trailingAudioDuration)
             playback.observeSynthesisMetrics(metrics)
-            if playback.shouldStartWhenBuffered {
+            if !playbackIsPaused, playback.shouldStartWhenBuffered {
                 playback.play()
                 statusText = "Playing"
                 updateJob(
@@ -1890,7 +2067,7 @@ public final class SayItBackendService: SayItService {
             if request.source != .preview {
                 try await archiveCompletedRequest(request)
             }
-            activeRequest = nil
+            if activeJobID == request.id { activeRequest = nil }
         case .cancelled:
             throw CancellationError()
         }
@@ -1953,6 +2130,7 @@ public final class SayItBackendService: SayItService {
         startNext: Bool = true,
         forModelSwitch: Bool = false
     ) async {
+        playbackIsPaused = false
         guard let id = activeJobID else {
             if forModelSwitch {
                 await playback.stopForModelSwitch()
@@ -2026,6 +2204,7 @@ public final class SayItBackendService: SayItService {
         resumePlaybackCompletion(for: id, with: playback.state)
         stopSynthesisWatchdog(for: id)
         activeJobID = nil
+        playbackIsPaused = false
         activeRequest = nil
         jobTask = nil
         statusText = errorMessage == nil ? "Ready to speak" : "Needs attention"
@@ -2056,6 +2235,8 @@ public final class SayItBackendService: SayItService {
         progress: Double
     ) {
         guard var job = jobsByID[id], !job.state.isTerminal else { return }
+        let state = playbackIsPaused && activeJobID == id && !state.isTerminal
+            ? SpeechJobState.paused : state
         let previousState = job.state
         let boundedProgress = min(max(progress, 0), 1)
         guard state != previousState || boundedProgress != job.progress else {
@@ -2182,10 +2363,15 @@ public final class SayItBackendService: SayItService {
     private func playbackStateDidChange(_ state: PlaybackState) {
         switch state {
         case .playing:
+            playbackIsPaused = false
             updateActiveJobState(.playing)
         case .paused:
+            playbackIsPaused = true
             updateActiveJobState(.paused)
         case .buffering:
+            // A paused controller enters buffering when playback is resumed,
+            // including through the system media controls.
+            playbackIsPaused = false
             updateActiveJobState(.buffering)
         default:
             break
@@ -2331,7 +2517,7 @@ public final class SayItBackendService: SayItService {
         return ServiceSnapshot(
             serviceVersion: serviceVersion,
             revision: revision,
-            statusText: statusText,
+            statusText: playbackIsPaused ? "Paused" : statusText,
             lastError: errorMessage,
             httpServiceError: httpServiceError,
             activeJob: activeJob,
@@ -2345,7 +2531,8 @@ public final class SayItBackendService: SayItService {
             },
             queueBlock: queueBlockSnapshot,
             playback: PlaybackSnapshot(
-                state: playback.state.rawValue,
+                state: playbackIsPaused
+                    ? PlaybackState.paused.rawValue : playback.state.rawValue,
                 elapsed: playback.elapsed,
                 generatedDuration: playback.generatedDuration,
                 estimatedDuration: playback.estimatedDuration,
@@ -3091,7 +3278,8 @@ public final class SayItBackendService: SayItService {
     }
 
     private func updateSettings(
-        _ requestedSettings: BackendSettingsSnapshot
+        _ requestedSettings: BackendSettingsSnapshot,
+        remoteOnly: Bool = false
     ) async throws {
         let modelIDAtReceipt = settingsStore.value.activeModelID
         var settings = requestedSettings
@@ -3109,6 +3297,12 @@ public final class SayItBackendService: SayItService {
         }
 
         let previousSettings = settingsStore.value
+        if remoteOnly {
+            settings = previousSettings
+            settings.copyRemoteTTS(from: requestedSettings)
+        } else {
+            settings.copyRemoteTTS(from: previousSettings)
+        }
         let previousModelID = previousSettings.activeModelID
         let requestedModelID = ModelID(settings.activeModelID)
         guard models.contains(where: {
@@ -3119,13 +3313,18 @@ public final class SayItBackendService: SayItService {
                 message: "The selected model was not found."
             )
         }
-        if settings.activeModelID != previousModelID,
+        let disablingRemoteTTS = previousSettings.remoteTTSEnabled
+            && !settings.remoteTTSEnabled
+        let changingModel = settings.activeModelID != previousModelID
+        if !settings.remoteTTSEnabled,
+           (changingModel || disablingRemoteTTS),
            !installedModelIDs.contains(requestedModelID) {
             throw ServiceFailure(
                 code: "model.not_installed",
                 message: "Install the model before selecting it."
             )
         }
+        try validateRemoteTTSSettings(settings)
         guard SpeakingPace(rawValue: settings.speakingPace) != nil else {
             throw ServiceFailure(
                 code: "settings.invalid_speaking_pace",
@@ -3185,11 +3384,83 @@ public final class SayItBackendService: SayItService {
             paragraphPause: settings.paragraphPauseSeconds,
             idleUnloadDelay: settings.modelUnloadDelaySeconds
         )
+        if let routingSynthesizer {
+            await routingSynthesizer.updateRemoteConfiguration(
+                Self.remoteTTSConfiguration(from: settingsStore.value)
+            )
+        }
         await textCleaner.update(
             options: Self.textCleaningOptions(from: settings)
         )
         enforceRetention()
         revision &+= 1
+    }
+
+    private func setRemoteTTSAPIKey(_ key: String?, expectedEndpoint: String) async throws {
+        let endpoint = try Self.remoteTTSConfiguration(from: settingsStore.value)
+            .speechEndpointURL()
+        var expected = Self.remoteTTSConfiguration(from: settingsStore.value)
+        expected.baseURL = RemoteTTSConfiguration.parseBaseURL(expectedEndpoint)
+        guard try expected.speechEndpointURL() == endpoint else {
+            throw ServiceFailure(code: "settings.remote_endpoint_changed",
+                message: "The remote endpoint changed. Refresh settings before saving its key.")
+        }
+        let trimmed = key?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            try await remoteTTSAPIKeyStore.save(trimmed, for: endpoint)
+        } else {
+            try await remoteTTSAPIKeyStore.remove(for: endpoint)
+        }
+        revision &+= 1
+    }
+
+    private func validateRemoteTTSSettings(
+        _ settings: BackendSettingsSnapshot
+    ) throws {
+        guard settings.remoteTTSEnabled else { return }
+        guard RemoteTTSConfiguration.parseBaseURL(settings.remoteTTSBaseURL) != nil else {
+            throw ServiceFailure(
+                code: "settings.invalid_remote_tts_url",
+                message: "Enter a valid remote TTS URL. Use https://, or http:// only for local-network hosts."
+            )
+        }
+        let model = settings.remoteTTSModel
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty else {
+            throw ServiceFailure(
+                code: "settings.invalid_remote_tts_model",
+                message: "Enter the remote model id expected by your endpoint."
+            )
+        }
+        let voice = settings.remoteTTSVoice
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !voice.isEmpty else {
+            throw ServiceFailure(
+                code: "settings.invalid_remote_tts_voice",
+                message: "Enter the remote voice id expected by your endpoint."
+            )
+        }
+        guard settings.remoteTTSTimeoutSeconds.isFinite,
+              (5...600).contains(settings.remoteTTSTimeoutSeconds) else {
+            throw ServiceFailure(
+                code: "settings.invalid_remote_tts_timeout",
+                message: "Remote TTS timeout must be between 5 and 600 seconds."
+            )
+        }
+    }
+
+    private static func remoteTTSConfiguration(
+        from settings: BackendSettingsSnapshot
+    ) -> RemoteTTSConfiguration {
+        RemoteTTSConfiguration(
+            enabled: settings.remoteTTSEnabled,
+            baseURL: RemoteTTSConfiguration.parseBaseURL(settings.remoteTTSBaseURL),
+            model: settings.remoteTTSModel
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            voice: settings.remoteTTSVoice
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            timeoutSeconds: settings.remoteTTSTimeoutSeconds
+        )
     }
 
     private func waitForPendingModelTransitions() async {

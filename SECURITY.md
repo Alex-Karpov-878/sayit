@@ -71,3 +71,15 @@ events exclude source text and credentials.
 
 Report security issues privately to this fork's repository owner. Never include
 credentials, private speech, or identifying machine details in public reports.
+
+## Optional remote speech
+
+Remote OpenAI-compatible TTS is disabled by default. Enabling it in Advanced
+settings sends text to the configured endpoint when speech is requested. API
+keys remain in Keychain, separate from settings and diagnostics. Local synthesis
+remains the default. Remote requests are explicitly authorized through the
+reviewed network policy; unmanaged model downloads remain blocked.
+
+HTTPS is required except for loopback and local-network endpoints. Redirects
+are refused. Changing endpoints does not forward the previous endpoint's key.
+Remote audio responses and decoded PCM are bounded before playback.

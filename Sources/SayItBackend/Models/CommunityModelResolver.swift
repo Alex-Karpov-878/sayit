@@ -141,6 +141,7 @@ actor CommunityModelResolver {
     }
 
     func resolveLocal(directory: URL) throws -> ModelDescriptor {
+        let directory = directory.standardizedFileURL.resolvingSymlinksInPath()
         let configURL = directory.appending(path: "config.json")
         try ModelFileIntegrity.checkReadable(configURL)
         let configData = try Data(contentsOf: configURL)
@@ -177,9 +178,13 @@ actor CommunityModelResolver {
                 throw ModelManagerError.incompleteSnapshot
             }
             guard values.isRegularFile == true else { continue }
-            let relativePath = String(
-                fileURL.path.dropFirst(directory.path.count + 1)
-            )
+            let rootPath = directory.standardizedFileURL.resolvingSymlinksInPath().path
+            let filePath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+            let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+            guard filePath.hasPrefix(prefix) else {
+                throw ModelManagerError.incompleteSnapshot
+            }
+            let relativePath = String(filePath.dropFirst(prefix.count))
             try ModelFileIntegrity.checkReadable(fileURL)
             files.append((relativePath, Int64(values.fileSize ?? 0)))
             manifest.append(ModelFileDescriptor(path: relativePath,

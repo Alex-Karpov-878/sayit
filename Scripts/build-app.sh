@@ -48,6 +48,10 @@ xcodegen generate --spec "$project_root/project.yml" \
     --project "$project_root"
 
 build() {
+    # Opt in only after reviewing the pinned build plugins. Execution remains sandboxed.
+    if [ "${SAYIT_TRUST_REVIEWED_PLUGINS:-0}" = "1" ]; then
+        set -- -skipPackagePluginValidation "$@"
+    fi
     echo "Building Say It (Release)…"
     DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
     CLANG_MODULE_CACHE_PATH="$module_cache" \

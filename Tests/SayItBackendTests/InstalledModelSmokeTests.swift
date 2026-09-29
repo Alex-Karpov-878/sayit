@@ -137,13 +137,10 @@ struct InstalledModelSmokeTests {
                 ?? model.inferredLanguage(forPresetVoice: voice)
                 ?? model.defaultLanguage
             let request = SpeechRequest(
-                cleanedText: CleanedText(
-                    text: auditText ?? sampleText(for: model, language: language),
-                    title: "Model audit",
-                    detectedLanguage: language ?? "en",
-                    cleanupSummary: CleanupSummary(sourceFormat: "plainText"),
-                    requiresLongTextConfirmation: false
-                ),
+                cleanedText: try await TextCleaner().ingest(.init(
+                    source: .clipboard,
+                    plainText: auditText ?? sampleText(for: model, language: language)
+                )),
                 model: model,
                 voice: voice,
                 language: language,

@@ -78,6 +78,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = notification
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        NotificationCenter.default.post(name: .sayItReopen, object: nil)
+        return false
+    }
+
     func applicationShouldTerminate(
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
