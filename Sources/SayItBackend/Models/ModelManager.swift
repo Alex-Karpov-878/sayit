@@ -261,6 +261,7 @@ actor ModelManager: ModelManaging {
                     resumeDataURL: staged.appendingPathExtension("resume"),
                     completedBytes: completedBytes,
                     totalBytes: totalBytes,
+                    maximumFileBytes: file.byteCount,
                     progress: progress
                 )
                 guard isSuccessful(response) else {
@@ -315,7 +316,25 @@ actor ModelManager: ModelManaging {
               let installation = installation(for: model) else {
             return nil
         }
-        return directories.models.appending(path: installation.relativePath)
+        guard ModelFilePolicy.isSafeRelativePath(installation.relativePath) else { return nil }
+        let directory = directories.models.appending(path: installation.relativePath)
+        let knownFiles = installation.files ?? model.files
+        let installedVoices = model.files.filter {
+            $0.path.hasPrefix("voices/")
+                && FileManager.default.fileExists(atPath: directory.appending(path: $0.path).path)
+        }
+        let files = knownFiles + installedVoices
+        guard files.contains(where: { $0.path == "config.json" }), files.allSatisfy({
+            isValidExistingFile(directory.appending(path: $0.path), descriptor: $0)
+        }), dependencies(for: model).allSatisfy({
+            dependencyIsValid($0, at: dependencyDestination($0))
+        }) else { return nil }
+        for dependency in dependencies(for: model) where dependency.id == "chatterbox-default-conditioning" {
+            guard dependency.files.allSatisfy({
+                isValidExistingFile(directory.appending(path: $0.path), descriptor: $0)
+            }) else { return nil }
+        }
+        return directory
     }
 
     func addCommunityModel(_ model: ModelDescriptor) throws {
@@ -332,6 +351,10 @@ actor ModelManager: ModelManaging {
         from source: URL
     ) throws {
         try preflight(requiredBytes: model.estimatedDiskBytes)
+        guard ModelFilePolicy.isSafeRelativePath(model.id.rawValue),
+              ModelFilePolicy.isSafeRelativePath(model.revision) else {
+            throw ModelManagerError.incompleteSnapshot
+        }
         let staging = directories.downloads.appending(
             path: "\(model.id.rawValue)-\(model.revision).importing",
             directoryHint: .isDirectory
@@ -339,8 +362,25 @@ actor ModelManager: ModelManaging {
         if FileManager.default.fileExists(atPath: staging.path) {
             try FileManager.default.removeItem(at: staging)
         }
+        guard !model.files.isEmpty, model.files.allSatisfy(ModelFilePolicy.isValid) else {
+            throw ModelManagerError.incompleteSnapshot
+        }
         try FileManager.default.copyItem(at: source, to: staging)
         do {
+            for file in model.files {
+                try verify(staging.appending(path: file.path), descriptor: file)
+            }
+            // Copying a directory is not atomic with the source scan. Reject any
+            // newly introduced symlink, including hidden files and directories.
+            guard let entries = FileManager.default.enumerator(at: staging,
+                includingPropertiesForKeys: [.isSymbolicLinkKey], options: []) else {
+                throw ModelManagerError.incompleteSnapshot
+            }
+            for case let entry as URL in entries {
+                guard try entry.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+                    throw ModelManagerError.incompleteSnapshot
+                }
+            }
             let relativePath = "\(model.id.rawValue)/\(model.revision)"
             let installation = ModelInstallation(
                 modelID: model.id,
@@ -350,7 +390,8 @@ actor ModelManager: ModelManaging {
                 dependenciesVerifiedAt: requiresManagedDependencies(model)
                     ? nil
                     : .now,
-                relativePath: relativePath
+                relativePath: relativePath,
+                files: model.files
             )
             let metadata = try JSONEncoder.sayIt.encode(installation)
             try metadata.write(
@@ -384,11 +425,16 @@ actor ModelManager: ModelManaging {
         if files.isEmpty {
             files = try await resolveManifest(for: model)
         }
-        guard !files.isEmpty else {
+        guard !files.isEmpty, files.allSatisfy(ModelFilePolicy.isValid) else {
             throw ModelManagerError.incompleteSnapshot
         }
 
         let dependencies = dependencies(for: model)
+        guard dependencies.allSatisfy({
+            ModelFilePolicy.isSafeRelativePath($0.id)
+                && ModelFilePolicy.isSafeRelativePath($0.targetSubdirectory)
+                && $0.files.allSatisfy(ModelFilePolicy.isValid)
+        }) else { throw ModelManagerError.incompleteSnapshot }
         let dependencyBytes = dependencies.reduce(Int64(0)) {
             $0 + $1.files.reduce(Int64(0)) { $0 + $1.byteCount }
         }
@@ -396,6 +442,10 @@ actor ModelManager: ModelManaging {
             + dependencyBytes
         try preflight(requiredBytes: max(totalBytes, model.estimatedDiskBytes))
 
+        guard ModelFilePolicy.isSafeRelativePath(model.id.rawValue),
+              ModelFilePolicy.isSafeRelativePath(model.revision) else {
+            throw ModelManagerError.incompleteSnapshot
+        }
         let stagingName = "\(model.id.rawValue)-\(model.revision).partial"
         let staging = directories.downloads.appending(
             path: stagingName,
@@ -462,6 +512,7 @@ actor ModelManager: ModelManaging {
                     resumeDataURL: resumeURL,
                     completedBytes: completedBytes,
                     totalBytes: totalBytes,
+                    maximumFileBytes: file.byteCount,
                     progress: progress
                 )
                 guard let http = response as? HTTPURLResponse,
@@ -534,6 +585,7 @@ actor ModelManager: ModelManaging {
                         resumeDataURL: resumeURL,
                         completedBytes: completedBytes,
                         totalBytes: totalBytes,
+                        maximumFileBytes: file.byteCount,
                         progress: progress
                     )
                     guard let http = response as? HTTPURLResponse,
@@ -627,7 +679,8 @@ actor ModelManager: ModelManaging {
                 dependenciesVerifiedAt: requiresManagedDependencies(model)
                     ? nil
                     : .now,
-                relativePath: relativePath
+                relativePath: relativePath,
+                files: files
             )
             let metadata = try JSONEncoder.sayIt.encode(installation)
             try metadata.write(
@@ -740,6 +793,7 @@ actor ModelManager: ModelManaging {
                     resumeDataURL: resumeURL,
                     completedBytes: completedBytes,
                     totalBytes: totalBytes,
+                    maximumFileBytes: file.byteCount,
                     progress: progress
                 )
                 guard isSuccessful(response) else {
@@ -823,20 +877,24 @@ actor ModelManager: ModelManaging {
     private func resolveManifest(
         for model: ModelDescriptor
     ) async throws -> [ModelFileDescriptor] {
+        guard ModelFilePolicy.isRepository(model.repository),
+              ModelFilePolicy.isHexDigest(model.revision, length: 40) else {
+            throw ModelManagerError.invalidDownloadURL
+        }
         guard let url = URL(
             string: "https://huggingface.co/api/models/\(model.repository)/revision/\(model.revision)?blobs=true"
         ) else {
             throw ModelManagerError.invalidDownloadURL
         }
-        let (data, response) = try await session.data(
-            for: try await authorizedRequest(url: url)
+        let (data, response) = try await ModelHTTPData.read(session: session,
+            request: try await authorizedRequest(url: url)
         )
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode) else {
             throw ModelManagerError.invalidResponse
         }
         let remote = try JSONDecoder().decode(HuggingFaceModelResponse.self, from: data)
-        guard remote.sha == model.revision else {
+        guard remote.sha == model.revision, remote.siblings.count <= 4_096 else {
             throw ModelManagerError.invalidResponse
         }
 
@@ -847,12 +905,14 @@ actor ModelManager: ModelManaging {
             return ModelFileDescriptor(
                 path: sibling.rfilename,
                 byteCount: byteCount,
-                sha256: sibling.lfs?.sha256
+                sha256: sibling.lfs?.sha256,
+                gitBlobSHA1: sibling.lfs == nil ? sibling.blobId : nil
             )
         }
     }
 
     private func shouldInstall(_ path: String) -> Bool {
+        guard ModelFilePolicy.isSafeRelativePath(path) else { return false }
         if path.hasPrefix("samples/") || path.hasPrefix(".") {
             return false
         }
@@ -863,7 +923,6 @@ actor ModelManager: ModelManaging {
             || lower.hasSuffix(".model")
             || lower.hasSuffix(".txt")
             || lower.hasSuffix(".tiktoken")
-            || lower.hasSuffix(".py")
             || lower.hasSuffix(".wav")
     }
 
@@ -872,8 +931,13 @@ actor ModelManager: ModelManaging {
         revision: String,
         path: String
     ) throws -> URL {
+        guard ModelFilePolicy.isRepository(repository),
+              ModelFilePolicy.isHexDigest(revision, length: 40),
+              ModelFilePolicy.isSafeRelativePath(path) else {
+            throw ModelManagerError.invalidDownloadURL
+        }
         let allowed = CharacterSet.urlPathAllowed.subtracting(
-            CharacterSet(charactersIn: "#?")
+            CharacterSet(charactersIn: "#?%")
         )
         guard let encodedPath = path.addingPercentEncoding(
             withAllowedCharacters: allowed
@@ -893,6 +957,7 @@ actor ModelManager: ModelManaging {
         resumeDataURL: URL,
         completedBytes: Int64,
         totalBytes: Int64,
+        maximumFileBytes: Int64,
         progress: @escaping ProgressHandler
     ) async throws -> URLResponse {
         let request = try await authorizedRequest(url: remoteURL)
@@ -902,6 +967,7 @@ actor ModelManager: ModelManaging {
                 modelID: modelID,
                 baseCompletedBytes: completedBytes,
                 totalModelBytes: totalBytes,
+                maximumFileBytes: maximumFileBytes,
                 progress: progress
             )
             do {
@@ -933,6 +999,7 @@ actor ModelManager: ModelManaging {
             modelID: modelID,
             baseCompletedBytes: completedBytes,
             totalModelBytes: totalBytes,
+            maximumFileBytes: maximumFileBytes,
             progress: progress
         )
         return try await delegate.download(
@@ -986,7 +1053,7 @@ actor ModelManager: ModelManaging {
                 forHTTPHeaderField: "Authorization"
             )
         }
-        return request
+        return ModelNetworkPolicy.authorize(request)
     }
 
     private func preflight(requiredBytes: Int64) throws {
@@ -1020,7 +1087,9 @@ actor ModelManager: ModelManaging {
         files: [ModelFileDescriptor]
     ) throws {
         let config = url.appending(path: "config.json")
-        guard let configData = try? Data(contentsOf: config),
+        try ModelFileIntegrity.checkReadable(config)
+        guard files.contains(where: { $0.path == "config.json" }),
+              let configData = try? Data(contentsOf: config),
               let configJSON = try? JSONSerialization.jsonObject(
                   with: configData
               ) as? [String: Any],
@@ -1095,7 +1164,8 @@ actor ModelManager: ModelManaging {
             verifiedAt: installation.verifiedAt,
             dependenciesVerifiedAt: .now,
             dependenciesFingerprint: dependencyFingerprint(for: model),
-            relativePath: installation.relativePath
+            relativePath: installation.relativePath,
+            files: installation.files
         )
         let metadata = try JSONEncoder.sayIt.encode(updated)
         try metadata.write(
@@ -1159,35 +1229,42 @@ actor ModelManager: ModelManaging {
         _ url: URL,
         descriptor: ModelFileDescriptor
     ) -> Bool {
-        guard let size = try? url.resourceValues(
-            forKeys: [.fileSizeKey]
-        ).fileSize else {
+        do {
+            try verify(url, descriptor: descriptor)
+            return true
+        } catch {
             return false
         }
-        return Int64(size) == descriptor.byteCount
     }
 
     private func verify(
         _ url: URL,
         descriptor: ModelFileDescriptor
     ) throws {
-        guard isValidExistingFile(url, descriptor: descriptor) else {
+        let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
+        guard ModelFilePolicy.isValid(descriptor), values.isRegularFile == true,
+              values.isSymbolicLink != true,
+              Int64(values.fileSize ?? -1) == descriptor.byteCount else {
             throw ModelManagerError.incompleteSnapshot
         }
-        guard let expected = descriptor.sha256 else { return }
 
         var hasher = SHA256()
+        var gitHasher = Insecure.SHA1()
+        gitHasher.update(data: Data("blob \(descriptor.byteCount)\0".utf8))
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         while let data = try handle.read(upToCount: 1_024 * 1_024), !data.isEmpty {
             try Task.checkCancellation()
             hasher.update(data: data)
+            gitHasher.update(data: data)
         }
         let actual = hasher.finalize().map { byte in
             String(byte, radix: 16).leftPadding(toLength: 2, withPad: "0")
         }.joined()
-        guard actual == expected else {
-            try? FileManager.default.removeItem(at: url)
+        let gitHash = gitHasher.finalize().map { String(format: "%02x", $0) }.joined()
+        let matches = descriptor.sha256.map { actual == $0 }
+            ?? descriptor.gitBlobSHA1.map { gitHash == $0 } ?? false
+        guard matches else {
             throw ModelManagerError.checksumMismatch(path: descriptor.path)
         }
     }

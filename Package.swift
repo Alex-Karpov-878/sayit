@@ -23,6 +23,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "Packages/PlaybackDSP"),
+        .package(path: "Packages/yyjson"),
         .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"),
         .package(
             url: "https://github.com/Blaizzy/mlx-audio-swift.git",
@@ -38,7 +39,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/hummingbird-project/hummingbird.git",
-            exact: "2.22.0"
+            exact: "2.26.0"
         ),
         .package(
             url: "https://github.com/swift-server/swift-openapi-hummingbird",
@@ -171,12 +172,9 @@ let package = Package(
             name: "SayIt",
             dependencies: [
                 .product(name: "Sparkle", package: "Sparkle"),
-                "SayItBackend",
                 "SayItCore",
                 "SayItProtocol",
-                "SayItXPC",
-                .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
-                .product(name: "MLXAudioTTS", package: "mlx-audio-swift")
+                "SayItXPC"
             ],
             resources: [
                 .process("Resources")

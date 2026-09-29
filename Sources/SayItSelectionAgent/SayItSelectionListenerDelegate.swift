@@ -13,7 +13,7 @@ final class SayItSelectionListenerDelegate: NSObject, NSXPCListenerDelegate,
     private let connectionLock = NSLock()
     private var connections: [ObjectIdentifier: NSXPCConnection] = [:]
 
-    var codeSigningRequirement: String? {
+    var codeSigningRequirement: String {
         validator.codeSigningRequirement
     }
 

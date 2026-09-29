@@ -1,5 +1,8 @@
 # Say It
 
+This fork includes local-build and supply-chain hardening. Read [SECURITY.md](SECURITY.md)
+for the protections, changed defaults, and remaining trust boundaries before installing.
+
 Private, local text-to-speech for Apple silicon Macs. Say It turns selected or
 copied text into speech with open models running through
 [MLX Audio](https://github.com/Blaizzy/mlx-audio)—your text and generated audio
@@ -123,6 +126,12 @@ brew install xcodegen
 ./Scripts/build-app.sh
 ```
 
+Package versions are fixed by the checked-in lockfiles. On a new machine,
+Xcode may ask to approve MLX's `CudaBuild` plugin. Review and approve only the
+pinned package in Xcode, then rerun the build; plugin validation stays enabled.
+The reviewed plugin does no CUDA work on macOS. If dependencies have not yet
+been resolved, open the generated project in Xcode and resolve the locked graph.
+
 Local builds compile independent targets and Swift source batches in parallel,
 using all available logical CPUs by default. Set `SAYIT_BUILD_JOBS` to cap the
 number of concurrent build operations. Signed release builds keep whole-module
@@ -138,7 +147,7 @@ For a stable Accessibility grant across Debug rebuilds, set
 used for the app. The build does not select a certificate from your keychain
 automatically.
 
-Tests run with `swift test --disable-sandbox`.
+Tests run with `swift test`.
 
 ## More screenshots
 
@@ -151,7 +160,7 @@ under their own licenses; review the model card before downloading or using one.
 
 ### Software updates
 
-Say It checks daily and offers **Update Now** or **Later**. Update Now downloads,
-installs, and restarts Say It and its helpers. Later postpones reminders for
-24 hours; automatic checks can be disabled in Settings. See
-[software update and release details](docs/updates.md).
+Automatic and manual Sparkle updates are disabled in this fork so an upstream
+release cannot replace the security changes. Rebuild from reviewed source for
+updates. History saving is also off by default; enable it explicitly in History
+settings if desired. Existing saved history is retained until cleared.

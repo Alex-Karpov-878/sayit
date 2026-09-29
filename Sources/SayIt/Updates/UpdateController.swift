@@ -48,6 +48,11 @@ final class UpdateController: NSObject, NSWindowDelegate {
         status = "Updates are unavailable in development builds"
         return
         #else
+        guard Bundle.main.object(forInfoDictionaryKey: "SayItUpdatesEnabled") as? Bool == true else {
+            phase = .unavailable
+            status = "Updates are disabled for this fork; rebuild from reviewed source."
+            return
+        }
         let location = Bundle.main.bundleURL
         let volume = try? location.resourceValues(forKeys: [.volumeIsReadOnlyKey])
         if volume?.volumeIsReadOnly == true || location.pathComponents.contains("AppTranslocation") {

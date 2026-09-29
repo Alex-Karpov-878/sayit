@@ -144,7 +144,8 @@ public struct AppDirectories: Sendable {
         ] {
             try FileManager.default.createDirectory(
                 at: url,
-                withIntermediateDirectories: true
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
             )
         }
         return directories

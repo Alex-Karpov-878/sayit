@@ -298,14 +298,10 @@ struct TextParser: Sendable {
     }
 
     private static func readHTML(_ data: Data) throws -> String {
-        try NSAttributedString(
-            data: data,
-            options: [
-                .documentType: NSAttributedString.DocumentType.html,
-                .characterEncoding: String.Encoding.utf8.rawValue
-            ],
-            documentAttributes: nil
-        ).string
+        guard let source = String(data: data, encoding: .utf8) else {
+            throw TextIngestionError.invalidRepresentation
+        }
+        return HTMLTextExtractor.text(from: source)
     }
 
     private func cleanRichText(_ data: Data) throws -> String {

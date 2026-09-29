@@ -292,8 +292,8 @@ struct ModelManagerTests {
         }
     }
 
-    @Test("Checksum mismatches remove the corrupt staged file")
-    func checksumMismatchRemovesFile() async throws {
+    @Test("Equal-size corrupt staged files are rejected and never marked installed")
+    func checksumMismatchRejectsFile() async throws {
         let fixture = try TemporaryBackendFixture(prefix: "SayItModelTests")
         defer { fixture.remove() }
         let config = Data(#"{"model_type":"qwen3_tts"}"#.utf8)
@@ -305,7 +305,7 @@ struct ModelManagerTests {
                 .init(
                     path: "config.json",
                     byteCount: Int64(config.count),
-                    sha256: nil
+                    sha256: sha256(config)
                 ),
                 .init(
                     path: "model.safetensors",
@@ -333,7 +333,8 @@ struct ModelManagerTests {
         await #expect(throws: ModelManagerError.self) {
             try await manager.install(model.id)
         }
-        #expect(!FileManager.default.fileExists(atPath: corruptURL.path))
+        #expect(await manager.installedURL(for: model.id) == nil)
+        #expect(!(await manager.installedModelIDs()).contains(model.id))
     }
 
     @Test("Managed dependencies must be explicitly verified after install")
@@ -353,7 +354,7 @@ struct ModelManagerTests {
                 .init(
                     path: "us_bart_config.json",
                     byteCount: Int64(dependencyConfig.count),
-                    sha256: nil
+                    sha256: sha256(dependencyConfig)
                 )
             ]
         )
@@ -365,12 +366,12 @@ struct ModelManagerTests {
                 .init(
                     path: "config.json",
                     byteCount: Int64(config.count),
-                    sha256: nil
+                    sha256: sha256(config)
                 ),
                 .init(
                     path: "model.safetensors",
                     byteCount: 1,
-                    sha256: nil
+                    sha256: sha256(weights)
                 )
             ]
         )
@@ -436,7 +437,7 @@ struct ModelManagerTests {
                 .init(
                     path: "config.json",
                     byteCount: Int64(dependencyData.count),
-                    sha256: nil
+                    sha256: sha256(dependencyData)
                 )
             ]
         )
@@ -510,6 +511,11 @@ struct ModelManagerTests {
             id: "community-local-test",
             revision: "local-revision",
             repository: "local-import",
+            files: [
+                .init(path: "config.json", byteCount: Int64(Data(#"{"model_type":"qwen3_tts"}"#.utf8).count),
+                      sha256: sha256(Data(#"{"model_type":"qwen3_tts"}"#.utf8))),
+                .init(path: "model.safetensors", byteCount: 3, sha256: sha256(Data([1, 2, 3])))
+            ],
             estimatedDiskBytes: 3
         )
         let manager = ModelManager(
@@ -521,6 +527,12 @@ struct ModelManagerTests {
         try await manager.importLocalModel(model, from: source)
         #expect(await manager.models().map(\.id) == [model.id])
         #expect(await manager.installedModelIDs() == [model.id])
+
+        let installed = try #require(await manager.installedURL(for: model.id))
+        let weightFile = installed.appending(path: "model.safetensors")
+        try Data([3, 2, 1]).write(to: weightFile)
+        #expect(await manager.installedURL(for: model.id) == nil)
+        try Data([1, 2, 3]).write(to: weightFile)
 
         let replacement = makeModel(
             id: "community-local-test",

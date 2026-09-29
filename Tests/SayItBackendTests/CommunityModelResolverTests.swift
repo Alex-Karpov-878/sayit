@@ -16,7 +16,7 @@ struct CommunityModelResolverTests {
                 return try response(
                     request: request,
                     json: [
-                        "sha": "abcdef0123456789",
+                        "sha": "abcdef0123456789abcdef0123456789abcdef01",
                         "siblings": [
                             [
                                 "rfilename": "model.safetensors",
@@ -50,7 +50,7 @@ struct CommunityModelResolverTests {
         #expect(model.id.rawValue == "community-acme-kokoro-test-abcdef01")
         #expect(model.displayName == "Kokoro_Test")
         #expect(model.repository == "acme/Kokoro_Test")
-        #expect(model.revision == "abcdef0123456789")
+        #expect(model.revision == "abcdef0123456789abcdef0123456789abcdef01")
         #expect(model.modelType == "kokoro")
         #expect(model.defaultVoice == "af_heart")
         #expect(model.capabilities.presetVoices)
@@ -73,7 +73,7 @@ struct CommunityModelResolverTests {
                     return try response(
                         request: request,
                         json: [
-                            "sha": "1234567890abcdef",
+                            "sha": "1234567890abcdef1234567890abcdef12345678",
                             "siblings": [
                                 [
                                     "rfilename": "weights.safetensors",
@@ -149,7 +149,7 @@ struct CommunityModelResolverTests {
                         return try response(
                             request: request,
                             json: [
-                                "sha": "abcdef0123456789",
+                                "sha": "abcdef0123456789abcdef0123456789abcdef01",
                                 "siblings": [],
                                 "cardData": [:]
                             ]

@@ -17,8 +17,8 @@ source of truth for the generated `SayIt.xcodeproj`.
 
 - `./Scripts/build-app.sh` regenerates the Xcode project and produces a local
   Release app in `Build/`.
-- `swift test --disable-sandbox` runs the package test suite.
-- `swift test --disable-sandbox --filter TextChunkerTests` runs one suite while
+- `swift test` runs the package test suite.
+- `swift test --filter TextChunkerTests` runs one suite while
   iterating.
 - `./Scripts/validate-catalog.sh` validates the model catalog, plist, and
   entitlements.

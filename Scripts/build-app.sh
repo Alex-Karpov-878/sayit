@@ -62,7 +62,7 @@ build() {
         -jobs "$build_jobs" \
         -derivedDataPath "$derived_data" \
         -clonedSourcePackagesDirPath "$source_packages" \
-        -skipPackagePluginValidation \
+        -onlyUsePackageVersionsFromResolvedFile \
         -destination "platform=macOS,arch=arm64" \
         ARCHS=arm64 \
         ONLY_ACTIVE_ARCH=YES \
@@ -90,7 +90,7 @@ if [ "$sign_identity" = "-" ]; then
     build \
         CODE_SIGNING_ALLOWED=NO \
         CODE_SIGNING_REQUIRED=NO \
-        ENABLE_HARDENED_RUNTIME=NO \
+        ENABLE_HARDENED_RUNTIME=YES \
         SAYIT_APP_BUNDLE_IDENTIFIER="$local_identifier" \
         SAYIT_APP_DISPLAY_NAME="$local_display_name" \
         SAYIT_SELECTION_BUNDLE_IDENTIFIER="$local_selection_identifier" \
@@ -98,7 +98,14 @@ if [ "$sign_identity" = "-" ]; then
         SAYIT_LOCAL_SWIFT_FLAG="$local_swift_flags" \
         SWIFT_COMPILATION_MODE="${SAYIT_SWIFT_COMPILATION_MODE:-singlefile}"
 
-    codesign --force --deep --sign - "$app_root"
+    # Sign each nested executable before the outer bundle. Hardened runtime is
+    # required for cdhash authentication to exclude injected unsigned libraries.
+    "$project_root/Scripts/sign-embedded-code.sh" "$app_root" -
+    codesign --force --sign - --options runtime \
+        --identifier "$local_selection_identifier" \
+        "$app_root/Contents/Helpers/SayItSelectionAgent"
+    codesign --force --sign - --options runtime \
+        --entitlements "$project_root/Config/SayItLocal.entitlements" "$app_root"
 else
     code_sign_flags=
     if [ "$disable_secure_timestamp" = "YES" ]; then

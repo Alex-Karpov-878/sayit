@@ -11,6 +11,11 @@ struct HistorySettingsView: View {
     var body: some View {
         Form {
             Section {
+                Toggle("Save speech history", isOn: $settings.historyEnabled)
+            } footer: {
+                Text("Off by default. When enabled, text, job recovery data, and generated audio are saved locally without application-level encryption. Turning this off keeps existing history; use Clear History to delete it.")
+            }
+            Section {
                 Picker("Keep history", selection: $settings.retentionPeriod) {
                     Text("7 days").tag(RetentionPeriod.sevenDays)
                     Text("30 days").tag(RetentionPeriod.thirtyDays)

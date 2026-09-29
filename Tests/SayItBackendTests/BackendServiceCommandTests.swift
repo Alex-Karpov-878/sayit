@@ -8,6 +8,28 @@ import Testing
 @Suite("Backend service commands", .serialized)
 @MainActor
 struct BackendServiceCommandTests {
+    @Test("Speech text and recovery jobs persist only after opting in", arguments: [false, true])
+    func historyRequiresOptIn(enabled: Bool) async throws {
+        let fixture = try ServiceFixture(historyEnabled: enabled, synthesizesAudio: true)
+        defer { fixture.remove() }
+        try fixture.seedInstallation(modelID: fixture.seedModelID)
+        await fixture.service.start()
+        let job = try submittedJob(await fixture.service.handle(.init(command: .submit(
+            SpeechSubmission(text: "Private speech fixture.", source: .commandLine)
+        ))))
+        _ = try await waitForServiceSnapshot(fixture.service) {
+            $0.activeJob?.id == job.id && $0.playback.state == PlaybackState.playing.rawValue
+        }
+        let items = try history(await fixture.service.handle(.init(command: .history)))
+        #expect(items.isEmpty == !enabled)
+        let journal = fixture.directories.applicationSupport.appending(path: "Speech Jobs.json")
+        #expect(FileManager.default.fileExists(atPath: journal.path) == enabled)
+        if !enabled {
+            #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.directories.historyAudio.path).isEmpty)
+        }
+        await fixture.service.shutdown()
+    }
+
     @Test("Replaying history restores saved audio boundaries and supports legacy recordings")
     func historyRestoresTiming() async throws {
         for includesTiming in [false, true] {
@@ -2392,6 +2414,7 @@ private final class ServiceFixture {
     private(set) var historyID: UUID?
 
     init(
+        historyEnabled: Bool = false,
         seedVoiceAndHistory: Bool = false,
         seedPlaybackTiming: Bool = false,
         synthesizesAudio: Bool = false,
@@ -2407,6 +2430,10 @@ private final class ServiceFixture {
             directoryHint: .isDirectory
         )
         directories = try AppDirectories.testing(root: root)
+        if historyEnabled {
+            try BackendSettingsStore(directory: directories.applicationSupport)
+                .update(BackendSettingsSnapshot(historyEnabled: true))
+        }
         if seedVoiceAndHistory {
             profileID = UUID()
             try Self.seedProfile(

@@ -9,6 +9,7 @@ final class ModelFileDownloadDelegate: NSObject, URLSessionDownloadDelegate,
     private let modelID: ModelID
     private let baseCompletedBytes: Int64
     private let totalModelBytes: Int64
+    private let maximumFileBytes: Int64
     private let progress: ProgressHandler
     private let lock = NSLock()
     private var continuation: CheckedContinuation<URLResponse, Error>?
@@ -26,11 +27,13 @@ final class ModelFileDownloadDelegate: NSObject, URLSessionDownloadDelegate,
         modelID: ModelID,
         baseCompletedBytes: Int64,
         totalModelBytes: Int64,
+        maximumFileBytes: Int64? = nil,
         progress: @escaping ProgressHandler
     ) {
         self.modelID = modelID
         self.baseCompletedBytes = baseCompletedBytes
         self.totalModelBytes = totalModelBytes
+        self.maximumFileBytes = maximumFileBytes ?? totalModelBytes
         self.progress = progress
     }
 
@@ -93,6 +96,12 @@ final class ModelFileDownloadDelegate: NSObject, URLSessionDownloadDelegate,
         totalBytesWritten: Int64,
         totalBytesExpectedToWrite: Int64
     ) {
+        guard totalBytesWritten <= maximumFileBytes,
+              totalBytesExpectedToWrite <= maximumFileBytes else {
+            lock.withLock { transferError = URLError(.dataLengthExceedsMaximum) }
+            downloadTask.cancel()
+            return
+        }
         let speed = lock.withLock { () -> Int64? in
             speedMeter.record(totalBytes: totalBytesWritten)
                 ? speedMeter.bytesPerSecond
@@ -127,6 +136,8 @@ final class ModelFileDownloadDelegate: NSObject, URLSessionDownloadDelegate,
         didFinishDownloadingTo location: URL
     ) {
         do {
+            let size = try location.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size <= maximumFileBytes else { throw URLError(.dataLengthExceedsMaximum) }
             guard let destination = lock.withLock({
                 downloadedFileURL
             }) else {
@@ -188,7 +199,7 @@ final class ModelFileDownloadDelegate: NSObject, URLSessionDownloadDelegate,
             return
         }
         let destination = lock.withLock { () -> URL? in
-            guard !didSaveResumeData else { return nil }
+            guard transferError == nil, !didSaveResumeData else { return nil }
             didSaveResumeData = true
             return resumeDataURL
         }

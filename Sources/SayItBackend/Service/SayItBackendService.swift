@@ -1770,7 +1770,7 @@ public final class SayItBackendService: SayItService {
             source: submission.source.triggerSource
         )
         activeRequest = request
-        if submission.source != .preview {
+        if submission.source != .preview, settings.historyEnabled {
             try history.begin(request)
             historyRevision &+= 1
         }
@@ -1897,9 +1897,15 @@ public final class SayItBackendService: SayItService {
     }
 
     private func archiveCompletedRequest(_ request: SpeechRequest) async throws {
+        guard settingsStore.value.historyEnabled,
+              history.items.contains(where: { $0.id == request.id }) else { return }
         let spokenChunks = playback.spokenChunks
         do {
             let archive = try await playback.archive(using: audioArchive)
+            guard settingsStore.value.historyEnabled else {
+                await audioArchive.remove(relativePath: archive.relativePath)
+                return
+            }
             do {
                 try history.complete(
                     id: request.id,
@@ -3171,6 +3177,7 @@ public final class SayItBackendService: SayItService {
             httpServiceError = nil
             httpServiceConfigurationHandler?(httpServiceConfiguration)
         }
+        if !settings.historyEnabled { try jobJournalStore.remove() }
         applyPlaybackSettings(settings)
         await synthesizer.updateConfiguration(
             chunkTarget: settings.chunkCharacterTarget,
@@ -3264,6 +3271,10 @@ public final class SayItBackendService: SayItService {
     }
 
     private func restoreJobJournal() {
+        guard settingsStore.value.historyEnabled else {
+            try? jobJournalStore.remove()
+            return
+        }
         guard let journal = jobJournalStore.load() else { return }
         jobsByID = Dictionary(
             uniqueKeysWithValues: journal.jobs.map { ($0.id, $0) }
@@ -3290,6 +3301,10 @@ public final class SayItBackendService: SayItService {
     }
 
     private func persistJobJournal() {
+        guard settingsStore.value.historyEnabled else {
+            try? jobJournalStore.remove()
+            return
+        }
         let journal = JobJournal(
             jobs: jobOrder.compactMap { jobsByID[$0] },
             pendingJobs: pendingJobs,

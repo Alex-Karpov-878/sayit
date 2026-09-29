@@ -10,9 +10,9 @@
       "targetSubdirectory": "beshkenadze_kitten-tts-g2p",
       "files": [
         {"path": "us_bart.safetensors", "byteCount": 3011692, "sha256": "dc4a02e62d4fcb4bb4097ecf00db89b8e1a12a549a52ab6adfbba220b80a55c5"},
-        {"path": "us_bart_config.json", "byteCount": 1257, "sha256": null},
-        {"path": "us_gold.json", "byteCount": 3001196, "sha256": null},
-        {"path": "us_silver.json", "byteCount": 3105352, "sha256": null}
+        {"path": "us_bart_config.json", "byteCount": 1257, "sha256": "8deb3537fb29c63cd9f20d75515ae06e4c92f1b6db0703a2d45bca95b33a53a4"},
+        {"path": "us_gold.json", "byteCount": 3001196, "sha256": "8507f89840f0813b10cf584740942f58e9cc9ad3660e24088b442ab0a6b126be"},
+        {"path": "us_silver.json", "byteCount": 3105352, "sha256": "ea0e1abca0c9b18fb0d3402034633a337154a3153e9a9f49f97d668c908e140c"}
       ]
     },
     {
@@ -22,11 +22,11 @@
       "revision": "a3d069caea9a2b63daed40834514431f73a2f11e",
       "targetSubdirectory": "beshkenadze_kokoro-ipa-lexicons",
       "files": [
-        {"path": "config.json", "byteCount": 1154, "sha256": null},
+        {"path": "config.json", "byteCount": 1154, "sha256": "70178ecd9bcd46a8a47b99fe3fc4a9261cbc915421a797a284eb3ed747e6b2d9"},
         {"path": "es_lexicon.tsv", "byteCount": 22908669, "sha256": "73b27dffa4b429fa41fb35ee132151ef70fde7869c23f6dd1d5440e66651368d"},
-        {"path": "fr_lexicon.tsv", "byteCount": 2497324, "sha256": null},
-        {"path": "it_lexicon.tsv", "byteCount": 919494, "sha256": null},
-        {"path": "pt_lexicon.tsv", "byteCount": 2115398, "sha256": null}
+        {"path": "fr_lexicon.tsv", "byteCount": 2497324, "sha256": "c44bc172a9bdbca24798cae60afbf00b6ce3991602524ee3a8bc816ab22d8267"},
+        {"path": "it_lexicon.tsv", "byteCount": 919494, "sha256": "0f190d1b9e054d02cc9fb870f54342f842591329ed9e95c889f5397040aeee88"},
+        {"path": "pt_lexicon.tsv", "byteCount": 2115398, "sha256": "ca212ceb562ddea7ceeb2d4998b90fad3d81c8c8ff6e2d1401a041cfcde8fa1f"}
       ]
     },
     {
@@ -36,7 +36,7 @@
       "revision": "1388486ea7ddcd1806f0179bb6ae55119d9d1d45",
       "targetSubdirectory": "beshkenadze_g2p-multilingual-byT5-tiny-mlx",
       "files": [
-        {"path": "config.json", "byteCount": 817, "sha256": null},
+        {"path": "config.json", "byteCount": 817, "sha256": "af86815dc6c276863245e7fac296868b0186ec323461992e2a78edcfdaf14920"},
         {"path": "model.safetensors", "byteCount": 82635688, "sha256": "ba965cc26804861252459556f40fdf8a643b7bf6f0e5d9565674b6a2c2ec3e38"}
       ]
     },
@@ -47,11 +47,11 @@
       "revision": "b112feef602fff752e4dac4c30af6a2c2fa41c7a",
       "targetSubdirectory": "llm-jp_llm-jp-3-150m",
       "files": [
-        {"path": "config.json", "byteCount": 680, "sha256": null},
-        {"path": "generation_config.json", "byteCount": 111, "sha256": null},
-        {"path": "special_tokens_map.json", "byteCount": 237, "sha256": null},
-        {"path": "tokenizer.json", "byteCount": 6416433, "sha256": null},
-        {"path": "tokenizer_config.json", "byteCount": 494, "sha256": null}
+        {"path": "config.json", "byteCount": 680, "sha256": "d5eb2e6c59d644bc077e08111359cc15ed21669e7bba8f48f3cfa4450fff7b0c"},
+        {"path": "generation_config.json", "byteCount": 111, "sha256": "e4c7d15deb9cdc781875c915f12b70feefeb4c087a358e582a9c96b9b1cad74a"},
+        {"path": "special_tokens_map.json", "byteCount": 237, "sha256": "f60631bdd138eb0c7db3d306fcf5e475a22d808fa2e2b2ad98cc32d17281194b"},
+        {"path": "tokenizer.json", "byteCount": 6416433, "sha256": "955dc1fa623fab38cc92a3f4ee172423ae6d73201c4207569bfdf5626bc733f0"},
+        {"path": "tokenizer_config.json", "byteCount": 494, "sha256": "1b457c73c2b6b683cbea24d883f7e5fa56fdd70b7cbf2fc8f42c0fd8de54c7a9"}
       ]
     },
     {
@@ -64,7 +64,7 @@
       "revision": "556af1cd3b1c5f2d294f6aa9bb886245d7b716ac",
       "targetSubdirectory": "mlx-community_snac_24khz",
       "files": [
-        {"path": "config.json", "byteCount": 300, "sha256": null},
+        {"path": "config.json", "byteCount": 300, "sha256": "e119b9366d4f5e73c6ca5f31137c4ff361578bbb132953a5203afe037c4012be"},
         {"path": "model.safetensors", "byteCount": 79404951, "sha256": "e61ae2f638f56ee07a37592cd5a6a9e7d642560ddc78a76ee4a7f96d6922f1be"}
       ]
     },
@@ -75,7 +75,7 @@
       "revision": "e0c9886f0e1c35ae85b1f27277416fb19fc72bec",
       "targetSubdirectory": "mlx-community_S3TokenizerV2",
       "files": [
-        {"path": "config.json", "byteCount": 126, "sha256": null},
+        {"path": "config.json", "byteCount": 126, "sha256": "8591fcc0eaae8c2bbfc69cf9d439933ecdf2d58cb9be63d00ce88736c4f2aa9d"},
         {"path": "model.safetensors", "byteCount": 494868984, "sha256": "928726bc1f206a613d36b8f49e297eae9c5593a21bf9b92ddfe2c23f85eb92cc"}
       ]
     },
@@ -115,7 +115,7 @@
       },
       "playbackMode": "progressive",
       "files": [
-        {"path": "config.json", "byteCount": 2351, "sha256": null},
+        {"path": "config.json", "byteCount": 2351, "sha256": "5abb01e2403b072bf03d04fde160443e209d7a0dad49a423be15196b9b43c17f"},
         {"path": "kokoro-v1_0.safetensors", "byteCount": 327115152, "sha256": "4e9ecdf03b8b6cf906070390237feda473dc13327cb8d56a43deaa374c02acd8"},
         {"path": "voices/af_alloy.safetensors", "byteCount": 522320, "sha256": "5bb848d02ade7e37981809acad52a1761ef7a586ff9f30d02d65fd71c4af95f9"},
         {"path": "voices/af_aoede.safetensors", "byteCount": 522320, "sha256": "23809148777f2a2378983dd856bc14b9c261018279f916f98c23d86e844409a5"},
@@ -215,9 +215,9 @@
       },
       "playbackMode": "progressive",
       "files": [
-        {"path": "config.json", "byteCount": 8314, "sha256": null},
+        {"path": "config.json", "byteCount": 8314, "sha256": "2a7cdecc0b48d9ad8d5f6adbf5d12d420ccc79a6e320db6361cf063e8a89ca39"},
         {"path": "model.safetensors", "byteCount": 289104072, "sha256": "9cb004f40e40ef642602c2dba23ed682d6afe57509b8807dc27894864c298586"},
-        {"path": "model.safetensors.index.json", "byteCount": 34175, "sha256": null},
+        {"path": "model.safetensors.index.json", "byteCount": 34175, "sha256": "8f6166bac80575b843de721de3d0c24fb0c9a306107c6e0711e8b7f8ab50ef1f"},
         {"path": "voices.npz", "byteCount": 3278902, "sha256": "40ad2638952b77b7b2f30127e2608e169fc69dd256b53bd8aaa3409a33193c42"}
       ],
       "estimatedDiskBytes": 293000000,
@@ -265,9 +265,9 @@
       },
       "playbackMode": "progressive",
       "files": [
-        {"path": "config.json", "byteCount": 2079, "sha256": null},
+        {"path": "config.json", "byteCount": 2079, "sha256": "15ea8e9aa752e03adfd4fb8f75b5074a630a7eb28c52a082d763b4feaf1cb3d5"},
         {"path": "model.safetensors", "byteCount": 30266836, "sha256": "44d067f84c8a8ed026b129b9194e1d0cb16beb3e052a413ad6df831c44121513"},
-        {"path": "model.safetensors.index.json", "byteCount": 44352, "sha256": null},
+        {"path": "model.safetensors.index.json", "byteCount": 44352, "sha256": "c86e592dd227f76ac170f69d71a48f185bb639295923e13a36eb77b3e5740d57"},
         {"path": "voices.npz", "byteCount": 3278902, "sha256": "8aa7cee235abb0739cb51e6559685f65a4dacd95568833d05699b1633f519b3f"}
       ],
       "estimatedDiskBytes": 34000000,

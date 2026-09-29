@@ -1,3 +1,7 @@
+> This fork disables Sparkle updates. The release workflow below describes the
+> upstream design and is inactive until fork-owned signing and update trust are
+> deliberately configured. See [SECURITY.md](../SECURITY.md).
+
 # Software updates
 
 Say It uses Sparkle 2.9.6 to verify and install updates in place. Update Now

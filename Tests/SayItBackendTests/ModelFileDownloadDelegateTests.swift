@@ -5,6 +5,27 @@ import Testing
 
 @Suite("Model file downloads", .serialized)
 struct ModelFileDownloadDelegateTests {
+    @Test("Oversized downloads cannot replace the destination")
+    func oversizedDownload() async throws {
+        let fixture = try TemporaryBackendFixture(prefix: "SayItDownloadLimitTests")
+        defer { fixture.remove() }
+        let session = makeDownloadSession { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                             headerFields: ["Content-Length": "128"])!, Data(repeating: 65, count: 128))
+        }
+        defer { session.invalidateAndCancel() }
+        let destination = fixture.root.appending(path: "model.bin")
+        try Data("original".utf8).write(to: destination)
+        let delegate = ModelFileDownloadDelegate(modelID: ModelID("limit"), baseCompletedBytes: 0,
+                                                  totalModelBytes: 128, maximumFileBytes: 16) { _ in }
+        await #expect(throws: (any Error).self) {
+            _ = try await delegate.download(using: session,
+                request: URLRequest(url: URL(string: "https://download.invalid/model.bin")!),
+                resumeData: nil, to: destination, resumeDataURL: fixture.root.appending(path: "resume"))
+        }
+        #expect(try Data(contentsOf: destination) == Data("original".utf8))
+    }
+
     @Test("Downloads replace destinations and report cumulative progress")
     func successfulDownloadAndProgress() async throws {
         let fixture = try TemporaryBackendFixture(

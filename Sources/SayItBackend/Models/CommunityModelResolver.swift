@@ -18,19 +18,24 @@ actor CommunityModelResolver {
         let normalizedRepository = repository.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
-        guard normalizedRepository.split(separator: "/").count == 2 else {
+        guard ModelFilePolicy.isRepository(normalizedRepository) else {
             throw ModelManagerError.modelNotFound
         }
         let requestedRevision = revision?.trimmingCharacters(
             in: .whitespacesAndNewlines
         ).nilIfEmpty ?? "main"
+        guard ModelFilePolicy.isSafeRelativePath(requestedRevision),
+              requestedRevision.utf8.allSatisfy({
+                  (65...90).contains($0) || (97...122).contains($0)
+                      || (48...57).contains($0) || [45, 46, 95].contains($0)
+              }) else { throw ModelManagerError.invalidDownloadURL }
         guard let metadataURL = URL(
             string: "https://huggingface.co/api/models/\(normalizedRepository)/revision/\(requestedRevision)?blobs=true"
         ) else {
             throw ModelManagerError.invalidDownloadURL
         }
-        let (metadataData, metadataResponse) = try await session.data(
-            for: request(url: metadataURL, token: token)
+        let (metadataData, metadataResponse) = try await ModelHTTPData.read(session: session,
+            request: request(url: metadataURL, token: token)
         )
         guard let http = metadataResponse as? HTTPURLResponse,
               (200..<300).contains(http.statusCode) else {
@@ -41,13 +46,19 @@ actor CommunityModelResolver {
             from: metadataData
         )
 
+        guard ModelFilePolicy.isHexDigest(metadata.sha, length: 40),
+              metadata.siblings.count <= 4_096,
+              metadata.siblings.allSatisfy({
+                  let size = $0.lfs?.size ?? $0.size ?? 0
+                  return size >= 0 && size <= 32 * 1_024 * 1_024 * 1_024
+              }) else { throw ModelManagerError.invalidResponse }
         guard let configURL = URL(
             string: "https://huggingface.co/\(normalizedRepository)/resolve/\(metadata.sha)/config.json"
         ) else {
             throw ModelManagerError.invalidDownloadURL
         }
-        let (configData, configResponse) = try await session.data(
-            for: request(url: configURL, token: token)
+        let (configData, configResponse) = try await ModelHTTPData.read(session: session,
+            request: request(url: configURL, token: token)
         )
         guard let configHTTP = configResponse as? HTTPURLResponse,
               (200..<300).contains(configHTTP.statusCode),
@@ -131,6 +142,7 @@ actor CommunityModelResolver {
 
     func resolveLocal(directory: URL) throws -> ModelDescriptor {
         let configURL = directory.appending(path: "config.json")
+        try ModelFileIntegrity.checkReadable(configURL)
         let configData = try Data(contentsOf: configURL)
         guard let config = try JSONSerialization.jsonObject(
             with: configData
@@ -152,12 +164,13 @@ actor CommunityModelResolver {
         guard let enumerator = FileManager.default.enumerator(
             at: directory,
             includingPropertiesForKeys: Array(resourceKeys),
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            options: []
         ) else {
             throw ModelManagerError.incompleteSnapshot
         }
 
         var files: [(path: String, bytes: Int64)] = []
+        var manifest: [ModelFileDescriptor] = []
         while let fileURL = enumerator.nextObject() as? URL {
             let values = try fileURL.resourceValues(forKeys: resourceKeys)
             guard values.isSymbolicLink != true else {
@@ -167,7 +180,11 @@ actor CommunityModelResolver {
             let relativePath = String(
                 fileURL.path.dropFirst(directory.path.count + 1)
             )
+            try ModelFileIntegrity.checkReadable(fileURL)
             files.append((relativePath, Int64(values.fileSize ?? 0)))
+            manifest.append(ModelFileDescriptor(path: relativePath,
+                byteCount: Int64(values.fileSize ?? 0),
+                sha256: try ModelFileIntegrity.sha256(fileURL)))
         }
         guard files.contains(where: {
             $0.path.hasSuffix(".safetensors") && $0.bytes > 0
@@ -218,7 +235,7 @@ actor CommunityModelResolver {
                 requiresReferenceAudio: referenceOnly
             ),
             playbackMode: progressive ? .progressive : .buffered,
-            files: [],
+            files: manifest,
             estimatedDiskBytes: max(diskBytes, 1),
             estimatedPeakMemoryBytes: max(diskBytes * 2, 1_000_000_000),
             hardwareTier: diskBytes > 2_000_000_000 ? .high : .mid,
@@ -242,6 +259,6 @@ actor CommunityModelResolver {
                 forHTTPHeaderField: "Authorization"
             )
         }
-        return request
+        return ModelNetworkPolicy.authorize(request)
     }
 }

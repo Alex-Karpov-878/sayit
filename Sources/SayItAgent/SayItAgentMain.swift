@@ -10,6 +10,9 @@ struct SayItAgentMain {
     static func main() async {
         let termination = AgentTerminationMonitor()
         do {
+            guard ModelNetworkPolicy.install() else {
+                throw URLError(.unsupportedURL)
+            }
             let directories = try AppDirectories.shared(
                 appGroupIdentifier: SayItServiceIdentifiers.appGroup
             )
@@ -30,9 +33,7 @@ struct SayItAgentMain {
             let listener = NSXPCListener(
                 machServiceName: SayItServiceIdentifiers.machService
             )
-            if let requirement = delegate.codeSigningRequirement {
-                listener.setConnectionCodeSigningRequirement(requirement)
-            }
+            listener.setConnectionCodeSigningRequirement(delegate.codeSigningRequirement)
             listener.delegate = delegate
             listener.resume()
 

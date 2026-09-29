@@ -12,6 +12,7 @@ public struct BackendSettingsSnapshot: Codable, Equatable, Sendable {
     public var rewindInterval: Double
     public var forwardInterval: Double
     public var showNowPlayingTitles: Bool
+    public var historyEnabled: Bool
     public var retentionPeriod: String
     public var historyQuotaBytes: Int64
     public var httpEnabled: Bool
@@ -39,6 +40,7 @@ public struct BackendSettingsSnapshot: Codable, Equatable, Sendable {
         rewindInterval: Double = 15,
         forwardInterval: Double = 30,
         showNowPlayingTitles: Bool = false,
+        historyEnabled: Bool = false,
         retentionPeriod: String = "thirtyDays",
         historyQuotaBytes: Int64 = 2 * 1_024 * 1_024 * 1_024,
         httpEnabled: Bool = false,
@@ -65,6 +67,7 @@ public struct BackendSettingsSnapshot: Codable, Equatable, Sendable {
         self.rewindInterval = rewindInterval
         self.forwardInterval = forwardInterval
         self.showNowPlayingTitles = showNowPlayingTitles
+        self.historyEnabled = historyEnabled
         self.retentionPeriod = retentionPeriod
         self.historyQuotaBytes = historyQuotaBytes
         self.httpEnabled = httpEnabled
@@ -94,6 +97,7 @@ public struct BackendSettingsSnapshot: Codable, Equatable, Sendable {
         case rewindInterval
         case forwardInterval
         case showNowPlayingTitles
+        case historyEnabled
         case retentionPeriod
         case historyQuotaBytes
         case httpEnabled
@@ -159,6 +163,7 @@ public struct BackendSettingsSnapshot: Codable, Equatable, Sendable {
             Bool.self,
             forKey: .showNowPlayingTitles
         ) ?? false
+        historyEnabled = try container.decodeIfPresent(Bool.self, forKey: .historyEnabled) ?? false
         retentionPeriod = try container.decodeIfPresent(
             String.self,
             forKey: .retentionPeriod

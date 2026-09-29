@@ -7,6 +7,7 @@ public struct ModelInstallation: Codable, Equatable, Sendable {
     public let verifiedAt: Date
     public let dependenciesVerifiedAt: Date?
     public let dependenciesFingerprint: String?
+    public let files: [ModelFileDescriptor]?
     public let relativePath: String
 
     public init(
@@ -16,7 +17,8 @@ public struct ModelInstallation: Codable, Equatable, Sendable {
         verifiedAt: Date,
         dependenciesVerifiedAt: Date? = nil,
         dependenciesFingerprint: String? = nil,
-        relativePath: String
+        relativePath: String,
+        files: [ModelFileDescriptor]? = nil
     ) {
         self.modelID = modelID
         self.revision = revision
@@ -25,5 +27,6 @@ public struct ModelInstallation: Codable, Equatable, Sendable {
         self.dependenciesVerifiedAt = dependenciesVerifiedAt
         self.dependenciesFingerprint = dependenciesFingerprint
         self.relativePath = relativePath
+        self.files = files
     }
 }

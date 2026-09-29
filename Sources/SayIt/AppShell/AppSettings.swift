@@ -21,6 +21,7 @@ final class AppSettings {
         static let forwardInterval = "forwardInterval"
         static let showNowPlayingTitles = "showNowPlayingTitles"
         static let retentionPeriod = "retentionPeriod"
+        static let historyEnabled = "historyEnabled"
         static let historyQuota = "historyQuota"
         static let checkForUpdates = "checkForUpdates"
         static let selectedSettingsPane = "selectedSettingsPane"
@@ -128,6 +129,12 @@ final class AppSettings {
     var showNowPlayingTitles: Bool {
         didSet {
             defaults.set(showNowPlayingTitles, forKey: Key.showNowPlayingTitles)
+            notifyBackendChange()
+        }
+    }
+    var historyEnabled: Bool {
+        didSet {
+            defaults.set(historyEnabled, forKey: Key.historyEnabled)
             notifyBackendChange()
         }
     }
@@ -311,6 +318,7 @@ final class AppSettings {
         retentionPeriod = RetentionPeriod(
             rawValue: defaults.string(forKey: Key.retentionPeriod) ?? ""
         ) ?? .thirtyDays
+        historyEnabled = defaults.bool(forKey: Key.historyEnabled)
         let storedQuota = defaults.object(forKey: Key.historyQuota) as? Int64
         historyQuotaBytes = storedQuota ?? 2 * 1_024 * 1_024 * 1_024
         checkForUpdates = defaults.object(forKey: Key.checkForUpdates) == nil
@@ -410,6 +418,7 @@ final class AppSettings {
             rewindInterval: rewindInterval,
             forwardInterval: forwardInterval,
             showNowPlayingTitles: showNowPlayingTitles,
+            historyEnabled: historyEnabled,
             retentionPeriod: retentionPeriod.rawValue,
             historyQuotaBytes: historyQuotaBytes,
             httpEnabled: httpEnabled,
@@ -445,6 +454,7 @@ final class AppSettings {
         retentionPeriod = RetentionPeriod(
             rawValue: snapshot.retentionPeriod
         ) ?? .thirtyDays
+        historyEnabled = snapshot.historyEnabled
         historyQuotaBytes = snapshot.historyQuotaBytes
         chunkCharacterTarget = snapshot.chunkCharacterTarget
         chunkDelaySeconds = snapshot.chunkDelaySeconds

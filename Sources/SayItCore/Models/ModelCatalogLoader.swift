@@ -35,8 +35,11 @@ public struct ModelCatalogLoader: Sendable {
         for dependency in catalog.dependencies {
             guard dependencyIDs.insert(dependency.id).inserted,
                   isImmutableRevision(dependency.revision),
-                  dependency.repository.split(separator: "/").count == 2,
-                  !dependency.files.isEmpty else {
+                  ModelFilePolicy.isRepository(dependency.repository),
+                  !dependency.files.isEmpty,
+                  ModelFilePolicy.isSafeRelativePath(dependency.id),
+                  ModelFilePolicy.isSafeRelativePath(dependency.targetSubdirectory),
+                  dependency.files.allSatisfy(ModelFilePolicy.isValid) else {
                 throw ModelCatalogError.invalidModel(
                     ModelID(dependency.id),
                     reason: "invalid offline dependency"
@@ -50,7 +53,9 @@ public struct ModelCatalogLoader: Sendable {
             guard isImmutableRevision(model.revision) else {
                 throw ModelCatalogError.invalidRevision(model.id)
             }
-            guard model.repository.split(separator: "/").count == 2 else {
+            guard ModelFilePolicy.isRepository(model.repository),
+                  ModelFilePolicy.isSafeRelativePath(model.id.rawValue),
+                  model.files.allSatisfy(ModelFilePolicy.isValid) else {
                 throw ModelCatalogError.invalidModel(
                     model.id,
                     reason: "repository must be owner/name"

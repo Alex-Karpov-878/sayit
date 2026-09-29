@@ -109,9 +109,9 @@ if [ "$mode" = prepare ]; then
     [ -x "$test_executable" ] || fail 'The package test executable is missing.'
     test_metallib="$(dirname "$test_executable")/mlx.metallib"
     cp "$app_metallib" "$test_metallib"
-    xcrun swift test --disable-sandbox --skip-build
-    xcrun swift test --disable-sandbox --package-path Packages/PlaybackDSP -c release
-    SAYIT_PLAYBACK_INTEGRATION=1 xcrun swift test --disable-sandbox --skip-build --filter TimeStretchPlaybackTests
+    xcrun swift test --skip-build
+    xcrun swift test --package-path Packages/PlaybackDSP -c release
+    SAYIT_PLAYBACK_INTEGRATION=1 xcrun swift test --skip-build --filter TimeStretchPlaybackTests
     rm -f "$test_metallib"
     test_metallib=
     SAYIT_APP_PATH="$app_root" ./Scripts/smoke-test-selection-xpc.sh

@@ -22,8 +22,15 @@ final class JobJournalStore {
         return try? JSONDecoder.sayIt.decode(JobJournal.self, from: data)
     }
 
+    func remove() throws {
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            try FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
     func save(_ journal: JobJournal) throws {
         let data = try JSONEncoder.sayIt.encode(journal)
         try data.write(to: fileURL, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
     }
 }

@@ -8,9 +8,7 @@ struct SayItSelectionAgentMain {
         let listener = NSXPCListener(
             machServiceName: SayItServiceIdentifiers.selectionMachService
         )
-        if let requirement = delegate.codeSigningRequirement {
-            listener.setConnectionCodeSigningRequirement(requirement)
-        }
+        listener.setConnectionCodeSigningRequirement(delegate.codeSigningRequirement)
         listener.delegate = delegate
         listener.resume()
         withExtendedLifetime(delegate) {
