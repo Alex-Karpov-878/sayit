@@ -22,6 +22,8 @@ struct VoicesSettingsView: View {
                         Text(model.displayName).tag(model.id)
                     }
                 }
+                .accessibilityLabel("Model")
+                .accessibilityIdentifier("voice-model-picker")
                 .onChange(of: selectedModelID) {
                     synchronizeSelection()
                 }

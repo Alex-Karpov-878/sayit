@@ -401,6 +401,15 @@ targets:
           ln -s "SayItCLI.app/Contents/MacOS/sayit" "${cli_dir}/sayit"
           ditto "${SRCROOT}/Config/sh.sayit.mac.agent.plist" "${agent_dir}/sh.sayit.mac.agent.plist"
 
+          # The UI does not link the inference/networking packages. Embed their
+          # actual shared products for the backend's outer-bundle runpath.
+          frameworks_dir="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Frameworks"
+          mkdir -p "${frameworks_dir}"
+          for framework in "${BUILT_PRODUCTS_DIR}/PackageFrameworks"/*.framework; do
+            [[ -d "${framework}" ]] || continue
+            ditto "${framework}" "${frameworks_dir}/$(basename "${framework}")"
+          done
+
           # Compiled Swift module metadata is only needed by developers linking
           # against a framework. Removing it from the distributed app also
           # prevents local source and package-cache paths from leaking.

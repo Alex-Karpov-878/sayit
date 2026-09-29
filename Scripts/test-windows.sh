@@ -7,14 +7,6 @@ products="$derived_data/Build/Products"
 module_cache="$project_root/Build/ModuleCache"
 sign_identity="${SAYIT_SIGN_IDENTITY:--}"
 
-# Library validation rejects ad-hoc dynamic frameworks. Keep hardened runtime
-# enabled and require a signing identity shared by the app and its frameworks.
-if [ "$sign_identity" = "-" ]; then
-    echo "Set SAYIT_SIGN_IDENTITY to a valid Apple signing identity for UI tests." >&2
-    echo "Ad-hoc builds compile, but macOS rejects their frameworks under hardened runtime." >&2
-    exit 2
-fi
-
 if pgrep -f "$products/Release/SayIt.app/Contents/MacOS/SayIt" >/dev/null 2>&1; then
     echo "Quit the local build before running window tests." >&2
     exit 2
@@ -60,13 +52,17 @@ xcodebuild \
 
 # Sign local bundles after building without an app-group provisioning profile.
 # The test runner also needs a valid resource seal before macOS can launch it.
-"$project_root/Scripts/sign-embedded-code.sh" "$products/Release/SayIt.app" "$sign_identity"
-codesign --force --sign "$sign_identity" --options runtime \
-    --identifier sh.sayit.mac.selection-helper.local \
-    "$products/Release/SayIt.app/Contents/Helpers/SayItSelectionAgent"
-codesign --force --sign "$sign_identity" --options runtime \
-    --entitlements "$project_root/Config/SayItLocal.entitlements" \
-    "$products/Release/SayIt.app"
+if [ "$sign_identity" = "-" ]; then
+    python3 "$project_root/Scripts/sign-local-app.py" "$products/Release/SayIt.app"
+else
+    "$project_root/Scripts/sign-embedded-code.sh" "$products/Release/SayIt.app" "$sign_identity"
+    codesign --force --sign "$sign_identity" --options runtime \
+        --identifier sh.sayit.mac.selection-helper.local \
+        "$products/Release/SayIt.app/Contents/Helpers/SayItSelectionAgent"
+    codesign --force --sign "$sign_identity" --options runtime \
+        --entitlements "$project_root/Config/SayItLocal.entitlements" \
+        "$products/Release/SayIt.app"
+fi
 codesign --force --deep --sign "$sign_identity" "$products/Release/SayItUITests-Runner.app"
 codesign --verify --deep --strict "$products/Release/SayIt.app"
 codesign --verify --deep --strict "$products/Release/SayItUITests-Runner.app"

@@ -197,10 +197,14 @@ dependency versions remain locked.
 
 ### Local signing and UI tests
 
-The hardened app needs a valid Apple signing identity shared by its executable
-and embedded frameworks. An ad-hoc build can compile and pass signature-seal
-checks, but macOS library validation can reject it at launch. Do not disable
-library validation to bypass this requirement. For window tests, set
-`SAYIT_SIGN_IDENTITY` to your installed signing identity before running
-`Scripts/test-windows.sh`; the script builds with local identifiers and signs
-the app and test runner with that identity.
+Personal local builds need no Apple developer account or signing identity.
+`Scripts/build-app.sh` signs the app ad hoc and retains hardened runtime. Since
+ad-hoc libraries have no Team ID, the local signer replaces the Team ID library
+check with a signed allowlist of the exact bundled libraries' code-directory
+hashes. Other non-system libraries are rejected. Rebuild the complete app after
+changing its libraries.
+
+Run `Scripts/test-windows.sh` for native window tests. It uses the same local
+signer by default; `SAYIT_SIGN_IDENTITY` remains optional for certificate-signed
+test builds. `python3 Scripts/test-local-signing.py` verifies that all local
+executables load an allowed library and reject an unlisted one.

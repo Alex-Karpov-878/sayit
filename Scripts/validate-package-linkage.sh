@@ -18,6 +18,22 @@ fail() {
         linked_libraries=$(
             /usr/bin/otool -l "$binary_path" 2>/dev/null
         ) || continue
+        # Shared package products live in the outer app's Frameworks directory.
+        # A successful link/signature seal does not prove they were embedded.
+        printf '%s\n' "$linked_libraries" \
+            | /usr/bin/awk '
+                $1 == "cmd" && $2 ~ /^LC_(LOAD|REEXPORT)_/ { reading_load = 1; next }
+                reading_load && $1 == "name" { print $2; reading_load = 0 }
+            ' \
+            | while IFS= read -r dependency; do
+                case "$dependency" in
+                    @rpath/*_PackageProduct.framework/*|@rpath/InternalCollectionsUtilities.framework/*)
+                        relative_path=${dependency#@rpath/}
+                        [ -f "$app_root/Contents/Frameworks/$relative_path" ] \
+                            || fail "missing shared package framework: $relative_path"
+                        ;;
+                esac
+            done
         if ! printf '%s\n' "$linked_libraries" \
             | /usr/bin/awk '
                 $1 == "cmd" && $2 ~ /^LC_(LOAD|REEXPORT)_/ {

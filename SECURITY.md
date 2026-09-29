@@ -12,7 +12,15 @@ executables bundled together and require the same user. This applies to local
 ad-hoc builds too. Missing, unsigned or invalid peer executables fail closed.
 Build and sign the complete bundle before running it; loose `swift run` helpers
 are intentionally not trusted. Rebuild/restart all peers together after changes.
-Local builds use hardened runtime. This does not protect against an attacker
+Local builds use hardened runtime. Ad-hoc builds replace the Team ID library
+check with a signed library-load constraint containing the exact code-directory
+hashes of their bundled libraries. The local signer pairs the disable-library-
+validation entitlement with that restrictive constraint on every Say It
+executable; it never enables unrestricted loading. System libraries are exempt
+from these constraints by macOS design. Certificate-signed builds retain the
+standard Team ID library validation. See Apple's documentation on
+[library constraints](https://developer.apple.com/documentation/security/applying-launch-environment-and-library-constraints).
+This does not protect against an attacker
 who can replace the whole app on disk or already control the user's account.
 
 Clipboard HTML is scanned as text, without WebKit or attributed-string HTML

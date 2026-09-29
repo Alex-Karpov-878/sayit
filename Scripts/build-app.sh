@@ -102,14 +102,10 @@ if [ "$sign_identity" = "-" ]; then
         SAYIT_LOCAL_SWIFT_FLAG="$local_swift_flags" \
         SWIFT_COMPILATION_MODE="${SAYIT_SWIFT_COMPILATION_MODE:-singlefile}"
 
-    # Sign each nested executable before the outer bundle. Hardened runtime is
-    # required for cdhash authentication to exclude injected unsigned libraries.
-    "$project_root/Scripts/sign-embedded-code.sh" "$app_root" -
-    codesign --force --sign - --options runtime \
-        --identifier "$local_selection_identifier" \
-        "$app_root/Contents/Helpers/SayItSelectionAgent"
-    codesign --force --sign - --options runtime \
-        --entitlements "$project_root/Config/SayItLocal.entitlements" "$app_root"
+    # Ad-hoc libraries have no Team ID. Pin their exact hashes while retaining
+    # hardened runtime instead of permitting arbitrary library loading.
+    python3 "$project_root/Scripts/sign-local-app.py" "$app_root"
+
 else
     code_sign_flags=
     if [ "$disable_secure_timestamp" = "YES" ]; then
