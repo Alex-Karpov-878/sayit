@@ -441,6 +441,10 @@ struct SpeechQueuePolicyTests {
         defer {
             try? FileManager.default.removeItem(at: root)
         }
+        // The recovery journal is persisted only after opting in to history.
+        try BackendSettingsStore(
+            directory: AppDirectories.testing(root: root).applicationSupport
+        ).update(BackendSettingsSnapshot(historyEnabled: true))
 
         let original = try SayItBackendService(
             directories: AppDirectories.testing(root: root),

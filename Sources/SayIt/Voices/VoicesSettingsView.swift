@@ -13,6 +13,7 @@ struct VoicesSettingsView: View {
     @State private var cloneModel: ModelDescriptor?
     @State private var draggingProfileID: UUID?
     @State private var customizeProfile: VoiceProfileSnapshot?
+    @State private var importModel: ModelDescriptor?
 
     var body: some View {
         Form {
@@ -20,12 +21,20 @@ struct VoicesSettingsView: View {
                 Picker("Model", selection: $selectedModelID) {
                     ForEach(voiceModels) { model in
                         Text(model.displayName).tag(model.id)
+                            .disabled(
+                                !state.installedModelIDs.contains(model.id)
+                                    && state.modelInstallIsBusy
+                            )
                     }
                 }
                 .accessibilityLabel("Model")
                 .accessibilityIdentifier("voice-model-picker")
-                .onChange(of: selectedModelID) {
+                .disabled(!state.isServiceOnline)
+                .onChange(of: selectedModelID) { previousModelID, _ in
                     synchronizeSelection()
+                    if !previousModelID.rawValue.isEmpty {
+                        activateSelectedModel()
+                    }
                 }
 
                 if let model = selectedModel {
@@ -39,31 +48,24 @@ struct VoicesSettingsView: View {
                     }
 
                     if state.modelsWithVoiceUpdates.contains(model.id) {
-                        Button("Update Voices") {
-                            state.installModel(model.id)
+                        if !hasSelectedModelDownload {
+                            Button("Update Voices", action: retrySelectedModelInstall)
+                                .disabled(!state.isServiceOnline || state.modelInstallIsBusy)
                         }
-                        .disabled(!state.isServiceOnline || state.modelInstallIsBusy)
                         Text("Download the latest voices for \(model.displayName).")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        if let progress = state.downloadProgress,
-                           progress.modelID == model.id,
-                           ![.failed, .paused].contains(progress.state) {
-                            ProgressView(
-                                "Updating voices",
-                                value: Double(progress.completedBytes),
-                                total: Double(max(progress.totalBytes, 1))
-                            )
-                            Button("Cancel Voice Update") {
-                                state.cancelModelInstall()
-                            }
-                            .disabled(state.isCancelingModelInstall)
-                        }
-                        if let error = state.modelInstallError,
-                           error.modelID == model.id {
-                            Text(error.message)
-                                .foregroundStyle(.red)
-                        }
+                    }
+
+                    if hasSelectedModelDownload {
+                        ModelDownloadControls(
+                            model: model, onRetry: retrySelectedModelInstall
+                        )
+                    }
+                    if let error = state.modelInstallError,
+                       error.modelID == model.id {
+                        Label(error.message, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.red)
                     }
 
                     if model.capabilities.voiceDescription,
@@ -74,18 +76,6 @@ struct VoicesSettingsView: View {
                             axis: .vertical
                         )
                         .lineLimit(2...4)
-                    }
-
-                    if !isSelectedModelActive {
-                        Button(
-                            selectedModelActionTitle(for: model),
-                            action: activateSelectedModel
-                        )
-                        .disabled(
-                            !state.isServiceOnline
-                                || (!isSelectedModelInstalled
-                                    && state.modelInstallIsBusy)
-                        )
                     }
                 }
             }
@@ -100,7 +90,9 @@ struct VoicesSettingsView: View {
                             .accessibilityHidden(true)
                         Text("No Saved Voices")
                             .font(.callout.weight(.medium))
-                        Text("Discover a voice you like, then save it here.")
+                        Text(selectedModel?.supportsPhononVoiceImport == true
+                            ? "Import a Phonon voice file to save it here."
+                            : "Discover a voice you like, then save it here.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -194,15 +186,35 @@ struct VoicesSettingsView: View {
                     }
                 }
             }
+
+            if let model = selectedModel, model.supportsPhononVoiceImport {
+                Section {
+                    Button("Import Voice File…", systemImage: "square.and.arrow.down") {
+                        importModel = model
+                    }
+                    .disabled(!state.isServiceOnline)
+                } footer: {
+                    Text("Import a voice exported for Phonon from Gradium. Imported voices stay on this Mac and work offline.")
+                }
+            }
         }
         .task {
             selectInitialModel()
+        }
+        .onChange(of: settings.voiceSelections) {
+            synchronizeSelection()
+        }
+        .onChange(of: selectedModel?.voices) {
+            synchronizeSelection()
         }
         .sheet(item: $discoveryModel) {
             VoiceDiscoveryView(model: $0)
         }
         .sheet(item: $cloneModel) {
             VoiceCloneWizard(model: $0)
+        }
+        .sheet(item: $importModel) { model in
+            PhononVoiceImportSheet(model: model)
         }
         .sheet(item: $customizeProfile) { profile in
             if let model = state.models.first(where: {
@@ -241,18 +253,9 @@ struct VoicesSettingsView: View {
         state.installedModelIDs.contains(selectedModelID)
     }
 
-    private var isSelectedModelActive: Bool {
-        settings.activeModelID == selectedModelID
-    }
-
-    private func selectedModelActionTitle(
-        for model: ModelDescriptor
-    ) -> String {
-        if isSelectedModelInstalled {
-            "Use \(model.displayName) for Speech"
-        } else {
-            "Download and Use \(model.displayName) for Speech"
-        }
+    private var hasSelectedModelDownload: Bool {
+        state.requestedModelInstallID == selectedModelID
+            || state.downloadProgress?.modelID == selectedModelID
     }
 
     private var isCreationUnavailable: Bool {
@@ -293,15 +296,25 @@ struct VoicesSettingsView: View {
     }
 
     private func activateSelectedModel() {
-        guard let model = selectedModel else { return }
+        guard let model = selectedModel,
+              state.isServiceOnline else { return }
         if isSelectedModelInstalled {
-            state.selectModel(model)
-        } else {
+            if settings.activeModelID != model.id {
+                state.selectModel(model)
+            }
+        } else if !hasSelectedModelDownload {
             state.installModel(
                 model.id,
                 selectAfterInstallation: true
             )
         }
+    }
+
+    private func retrySelectedModelInstall() {
+        state.installModel(
+            selectedModelID,
+            selectAfterInstallation: !isSelectedModelInstalled
+        )
     }
 
     private func moveVoice(_ draggedID: UUID, before targetID: UUID) {

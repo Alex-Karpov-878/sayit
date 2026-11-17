@@ -51,6 +51,14 @@ public final class SayItBackendService: SayItService {
     private var activeJobID: UUID?
     private var playbackIsPaused = false
     private var activeRequest: SpeechRequest?
+    private struct RequestTiming {
+        let modelID: ModelID
+        let started: ContinuousClock.Instant
+        var firstAudio: ContinuousClock.Instant?
+        var hasPlayed = false
+        var previousState: PlaybackState = .idle
+    }
+    private var requestTiming: RequestTiming?
     private var playbackCompletionJobID: UUID?
     private var playbackCompletionContinuation: CheckedContinuation<
         PlaybackState,
@@ -533,6 +541,18 @@ public final class SayItBackendService: SayItService {
                 modelID == nil || $0.modelID == modelID
             }
             return .voices(voices)
+        case .importPhononVoice(let modelID, let name, let data):
+            guard let model = models.first(where: { $0.id.rawValue == modelID }),
+                  SupportedModelTypes.areCompatible(model.modelType, "phonon") else {
+                throw ServiceFailure(
+                    code: "voice.import_unsupported",
+                    message: "Voice-file import is available for Phonon models."
+                )
+            }
+            _ = try voiceProfiles.importPhononVoice(data: data, modelID: modelID, name: name)
+            voicesRevision &+= 1
+            revision &+= 1
+            return .accepted
         case .startVoiceDiscovery(let request):
             return .voiceStudio(try startVoiceDiscovery(request))
         case .startVoiceClone(let request):
@@ -598,8 +618,8 @@ public final class SayItBackendService: SayItService {
             return .accepted
         case .history:
             return .history(history.items.map(\.serviceSnapshot))
-        case .exportHistory(let id, let format):
-            return .file(try await exportHistory(id: id, format: format))
+        case .exportHistory(let id, let format, let rate):
+            return .file(try await exportHistory(id: id, format: format, rate: rate ?? 1))
         case .replayHistory(let id):
             try await replayHistory(id)
             return .accepted
@@ -1344,10 +1364,9 @@ public final class SayItBackendService: SayItService {
                 parameters: validated.parameters
             ),
             seed: UInt64.random(in: UInt64.min...UInt64.max),
-            reference: VoiceReference(
-                audioURL: referenceURL,
-                transcript: record.transcript
-            )
+            reference: record.origin == .importedFile
+                ? VoiceReference(phononEmbeddingURL: referenceURL)
+                : VoiceReference(audioURL: referenceURL, transcript: record.transcript)
         )
         let temporary = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
@@ -1750,6 +1769,12 @@ public final class SayItBackendService: SayItService {
         startNextJobIfNeeded()
     }
 
+    /// Preset names are labels. Model loaders such as PocketTTS resolve an unknown
+    /// name as a local `.safetensors` path or an `hf://` URL, so reject both forms.
+    static func isPresetVoiceName(_ voice: String) -> Bool {
+        !voice.isEmpty && voice.rangeOfCharacter(from: CharacterSet(charactersIn: "/\\:~.")) == nil
+    }
+
     private func resolveVoice(
         submission: SpeechSubmission,
         settings: BackendSettingsSnapshot,
@@ -1779,6 +1804,12 @@ public final class SayItBackendService: SayItService {
                 tuning: nil
             )
         case .preset(let voice):
+            guard Self.isPresetVoiceName(voice) else {
+                throw ServiceFailure(
+                    code: "voice.preset_not_found",
+                    message: "The selected preset voice is unavailable for this model."
+                )
+            }
             if !model.voices.isEmpty, !model.voices.contains(voice) {
                 throw ServiceFailure(
                     code: "voice.preset_not_found",
@@ -1817,10 +1848,9 @@ public final class SayItBackendService: SayItService {
             return ResolvedVoice(
                 preset: nil,
                 mode: .savedProfile,
-                reference: VoiceReference(
-                    audioURL: referenceURL,
-                    transcript: record.transcript
-                ),
+                reference: record.origin == .importedFile
+                    ? VoiceReference(phononEmbeddingURL: referenceURL)
+                    : VoiceReference(audioURL: referenceURL, transcript: record.transcript),
                 profileID: record.id,
                 profileName: record.displayName,
                 tuning: VoiceSynthesisTuning(
@@ -1949,6 +1979,15 @@ public final class SayItBackendService: SayItService {
             historyRevision &+= 1
         }
 
+        armSynthesisWatchdog(for: id)
+        defer { stopSynthesisWatchdog(for: id) }
+        if submission.playbackEnabled == false {
+            try await synthesizeWithoutPlayback(request)
+            return
+        }
+
+        requestTiming = RequestTiming(modelID: request.model.id, started: .now)
+        defer { requestTiming = nil }
         playback.rate = validatedPlaybackRate(
             submission.playbackRate ?? settings.playbackRate
         )
@@ -1977,8 +2016,6 @@ public final class SayItBackendService: SayItService {
         statusText = "Preparing speech"
         errorMessage = nil
 
-        armSynthesisWatchdog(for: id)
-        defer { stopSynthesisWatchdog(for: id) }
         let stream = await synthesizer.synthesize(request)
         for try await event in stream {
             try Task.checkCancellation()
@@ -2002,6 +2039,61 @@ public final class SayItBackendService: SayItService {
         }
     }
 
+    private func synthesizeWithoutPlayback(_ request: SpeechRequest) async throws {
+        let audio = SpeechAudioCollector(
+            requestID: request.id,
+            directory: directories.temporary
+        )
+        defer { withExtendedLifetime(audio) {} }
+        statusText = "Generating speech"
+        errorMessage = nil
+        updateJob(request.id, state: .synthesizing, progress: 0.15)
+        var completed = false
+        let stream = await synthesizer.synthesize(request)
+        for try await event in stream {
+            try Task.checkCancellation()
+            armSynthesisWatchdog(for: request.id)
+            switch event {
+            case .audio(let chunk):
+                try audio.append(chunk)
+            case .completed:
+                completed = true
+            case .cancelled:
+                throw CancellationError()
+            default:
+                break
+            }
+        }
+        stopSynthesisWatchdog(for: request.id)
+        try Task.checkCancellation()
+        guard completed else { throw SynthesisError.generatedNoAudio }
+        let source = try audio.snapshot()
+        if request.source != .preview,
+           settingsStore.value.historyEnabled,
+           history.items.contains(where: { $0.id == request.id }) {
+            let archive = try await audioArchive.writeM4A(source: source, requestID: request.id)
+            guard settingsStore.value.historyEnabled else {
+                await audioArchive.remove(relativePath: archive.relativePath)
+                finishJob(request.id, state: .completed)
+                return
+            }
+            do {
+                try Task.checkCancellation()
+                try history.complete(
+                    id: request.id,
+                    duration: archive.duration,
+                    audioRelativePath: archive.relativePath,
+                    audioByteCount: archive.byteCount
+                )
+                historyRevision &+= 1
+            } catch {
+                await audioArchive.remove(relativePath: archive.relativePath)
+                throw error
+            }
+        }
+        finishJob(request.id, state: .completed)
+    }
+
     private func handleSynthesisEvent(
         _ event: SynthesisEvent,
         request: SpeechRequest
@@ -2019,7 +2111,18 @@ public final class SayItBackendService: SayItService {
             updateJob(request.id, state: .synthesizing, progress: 0.12)
         case .chunkStarted(_, let chunk):
             registerSpokenChunk(chunk)
+        case .timing(let timing):
+            await diagnostics.record(DiagnosticEvent(
+                severity: .info, category: .synthesis,
+                code: "synthesis.timing.\(timing.phase.rawValue)",
+                modelID: request.model.id,
+                durationMilliseconds: Int(timing.duration * 1_000)
+            ))
+            diagnosticsRevision &+= 1
         case .audio(let chunk):
+            if requestTiming?.firstAudio == nil {
+                requestTiming?.firstAudio = .now
+            }
             let revisionBeforeAudio = revision
             flushPendingSpokenChunk(speechStartOffset: chunk.speechStartOffset)
             try playback.enqueue(chunk)
@@ -2027,6 +2130,8 @@ public final class SayItBackendService: SayItService {
             spokenAudioCursor = playback.generatedDuration
             if !playbackIsPaused, playback.shouldStartWhenBuffered {
                 playback.play()
+            }
+            if playback.state == .playing {
                 statusText = "Playing"
                 updateJob(request.id, state: .playing, progress: playbackProgress)
             } else {
@@ -2035,6 +2140,13 @@ public final class SayItBackendService: SayItService {
             }
             if revision == revisionBeforeAudio {
                 revision &+= 1
+            }
+        case .progress(let progress):
+            playback.observeSynthesisProgress(progress)
+            if playback.shouldStartWhenBuffered {
+                playback.play()
+                statusText = "Playing"
+                updateJob(request.id, state: .playing, progress: playbackProgress)
             }
         case .metrics(let metrics):
             finalizeSpokenChunk(audioEnd: playback.generatedDuration + metrics.trailingAudioDuration)
@@ -2361,6 +2473,43 @@ public final class SayItBackendService: SayItService {
     }
 
     private func playbackStateDidChange(_ state: PlaybackState) {
+        if var timing = requestTiming {
+            var events: [DiagnosticEvent] = []
+            func milliseconds(since start: ContinuousClock.Instant) -> Int {
+                let duration = start.duration(to: .now)
+                return Int(Double(duration.components.seconds) * 1_000
+                    + Double(duration.components.attoseconds) / 1e15)
+            }
+            if state == .playing, !timing.hasPlayed {
+                timing.hasPlayed = true
+                events.append(DiagnosticEvent(
+                    severity: .info, category: .playback,
+                    code: "playback.timing.first_start", modelID: timing.modelID,
+                    durationMilliseconds: milliseconds(since: timing.started),
+                    numericValue: max(playback.generatedDuration - playback.elapsed, 0)
+                ))
+                if let firstAudio = timing.firstAudio {
+                    events.append(DiagnosticEvent(
+                        severity: .info, category: .playback,
+                        code: "playback.timing.buffer_wait", modelID: timing.modelID,
+                        durationMilliseconds: milliseconds(since: firstAudio)
+                    ))
+                }
+            } else if state == .buffering, timing.previousState == .playing {
+                events.append(DiagnosticEvent(
+                    severity: .info, category: .playback,
+                    code: "playback.rebuffered", modelID: timing.modelID
+                ))
+            }
+            timing.previousState = state
+            requestTiming = timing
+            if !events.isEmpty {
+                Task { [events] in
+                    for event in events { await diagnostics.record(event) }
+                    diagnosticsRevision &+= 1
+                }
+            }
+        }
         switch state {
         case .playing:
             playbackIsPaused = false
@@ -2606,7 +2755,7 @@ public final class SayItBackendService: SayItService {
         guard validated == rate else {
             throw ServiceFailure(
                 code: "playback.invalid_rate",
-                message: "Playback rate must be between 0.5 and 2."
+                message: "Playback rate must be between 0.5 and 3."
             )
         }
         await waitForPendingModelTransitions()
@@ -3213,8 +3362,21 @@ public final class SayItBackendService: SayItService {
 
     private func exportHistory(
         id: UUID,
-        format: String
+        format: String,
+        rate: Double
     ) async throws -> ExportedFile {
+        guard PlaybackRate.isSupported(rate) else {
+            throw ServiceFailure(
+                code: "export.invalid_rate",
+                message: "Choose an export rate from \(PlaybackRate.minimum) to \(PlaybackRate.maximum)."
+            )
+        }
+        guard rate == 1 || format.lowercased() == "wav" else {
+            throw ServiceFailure(
+                code: "export.unsupported_rate_format",
+                message: "Export speed is supported for WAV files."
+            )
+        }
         guard let item = history.items.first(where: { $0.id == id }) else {
             throw ServiceFailure(
                 code: "history.not_found",
@@ -3253,7 +3415,8 @@ public final class SayItBackendService: SayItService {
             defer { try? FileManager.default.removeItem(at: destination) }
             try await audioArchive.convertToWAV(
                 source: source,
-                destination: destination
+                destination: destination,
+                rate: rate
             )
             return ExportedFile(
                 filename: "\(baseName).wav",
@@ -3334,7 +3497,7 @@ public final class SayItBackendService: SayItService {
         guard PlaybackRate.isSupported(settings.playbackRate) else {
             throw ServiceFailure(
                 code: "settings.invalid_playback_rate",
-                message: "Playback rate must be between 0.5 and 2."
+                message: "Playback rate must be between 0.5 and 3."
             )
         }
         guard (0...2).contains(settings.volume) else {

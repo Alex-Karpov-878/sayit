@@ -74,6 +74,12 @@ actor CommunityModelResolver {
             throw ModelManagerError.modelUnavailable
         }
 
+        if rawType == "fish_drama3",
+           config["quantization"] == nil
+            || !metadata.siblings.contains(where: { $0.rfilename == "codec.safetensors" }) {
+            throw ModelManagerError.modelUnavailable
+        }
+
         let diskBytes = metadata.siblings.reduce(Int64(0)) {
             $0 + ($1.lfs?.size ?? $1.size ?? 0)
         }
@@ -81,11 +87,14 @@ actor CommunityModelResolver {
             "echo_tts", "echo", "indextts", "index_tts", "moss_tts_nano"
         ].contains(rawType)
         let voiceDesign = ["irodori_tts", "irodori", "omnivoice"].contains(rawType)
-        let progressive = [
+        let isPhonon = SupportedModelTypes.areCompatible(rawType, "phonon")
+        let progressive = isPhonon || [
             "kokoro", "kokoro_tts", "kitten_tts", "kitten", "pocket_tts"
         ].contains(rawType)
         let defaultVoice: String? = if ["kokoro", "kokoro_tts"].contains(rawType) {
             "af_heart"
+        } else if isPhonon {
+            "default"
         } else {
             nil
         }
@@ -107,7 +116,7 @@ actor CommunityModelResolver {
             family: "Community model",
             repository: normalizedRepository,
             revision: metadata.sha,
-            modelType: rawType,
+            modelType: SupportedModelTypes.loaderType(for: rawType),
             parameterCount: "Unknown",
             quantization: "Repository",
             languages: [],
@@ -117,13 +126,20 @@ actor CommunityModelResolver {
             capabilities: ModelCapabilities(
                 presetVoices: defaultVoice != nil,
                 voiceDescription: voiceDesign,
-                voiceCloning: referenceOnly,
-                streaming: progressive,
+                voiceCloning: referenceOnly || rawType == "fish_drama3",
+                streaming: progressive || rawType == "fish_drama3",
                 longForm: true,
-                languageSelection: true,
-                requiresReferenceAudio: referenceOnly
+                languageSelection: !isPhonon && rawType != "fish_drama3",
+                requiresReferenceAudio: referenceOnly,
+                voiceDiscovery: rawType == "fish_drama3" ? true : nil,
+                randomVoiceSampling: rawType == "fish_drama3" ? true : nil,
+                voiceCloneRequirements: rawType == "fish_drama3" ? .init(
+                    minimumDuration: 3, recommendedMinimumDuration: 5,
+                    recommendedMaximumDuration: 15, maximumDuration: 30,
+                    transcriptRequired: true
+                ) : nil
             ),
-            playbackMode: progressive ? .progressive : .buffered,
+            playbackMode: rawType == "fish_drama3" ? .adaptive : progressive ? .progressive : .buffered,
             files: [],
             estimatedDiskBytes: max(diskBytes, 1),
             estimatedPeakMemoryBytes: max(diskBytes * 2, 1_000_000_000),
@@ -135,7 +151,8 @@ actor CommunityModelResolver {
                 requiresAcceptance: true
             ),
             stability: referenceOnly ? .unavailable : .experimental,
-            testedMLXAudioVersion: "0.1.3",
+            testedMLXAudioVersion: rawType == "fish_drama3"
+                ? "624fd54 + DramaTTS 3.2.1" : "0.1.3",
             testedDate: "Community model — not tested"
         )
     }
@@ -154,6 +171,12 @@ actor CommunityModelResolver {
                 ?? config["model_version"] as? String
         )?.lowercased(),
         SupportedModelTypes.all.contains(rawType) else {
+            throw ModelManagerError.modelUnavailable
+        }
+
+        if rawType == "fish_drama3",
+           config["quantization"] == nil
+            || !FileManager.default.fileExists(atPath: directory.appending(path: "codec.safetensors").path) {
             throw ModelManagerError.modelUnavailable
         }
 
@@ -210,12 +233,17 @@ actor CommunityModelResolver {
             "echo_tts", "echo", "indextts", "index_tts", "moss_tts_nano"
         ].contains(rawType)
         let voiceDesign = ["irodori_tts", "irodori", "omnivoice"].contains(rawType)
-        let progressive = [
+        let isPhonon = SupportedModelTypes.areCompatible(rawType, "phonon")
+        let progressive = isPhonon || [
             "kokoro", "kokoro_tts", "kitten_tts", "kitten", "pocket_tts"
         ].contains(rawType)
-        let defaultVoice = ["kokoro", "kokoro_tts"].contains(rawType)
-            ? "af_heart"
-            : nil
+        let defaultVoice: String? = if ["kokoro", "kokoro_tts"].contains(rawType) {
+            "af_heart"
+        } else if isPhonon {
+            "default"
+        } else {
+            nil
+        }
 
         return ModelDescriptor(
             id: ModelID("community-local-\(revision.prefix(12))"),
@@ -223,7 +251,7 @@ actor CommunityModelResolver {
             family: "Imported model",
             repository: "local-import",
             revision: revision,
-            modelType: rawType,
+            modelType: SupportedModelTypes.loaderType(for: rawType),
             parameterCount: "Unknown",
             quantization: "Local",
             languages: [],
@@ -233,13 +261,20 @@ actor CommunityModelResolver {
             capabilities: ModelCapabilities(
                 presetVoices: defaultVoice != nil,
                 voiceDescription: voiceDesign,
-                voiceCloning: referenceOnly,
-                streaming: progressive,
+                voiceCloning: referenceOnly || rawType == "fish_drama3",
+                streaming: progressive || rawType == "fish_drama3",
                 longForm: true,
-                languageSelection: true,
-                requiresReferenceAudio: referenceOnly
+                languageSelection: !isPhonon && rawType != "fish_drama3",
+                requiresReferenceAudio: referenceOnly,
+                voiceDiscovery: rawType == "fish_drama3" ? true : nil,
+                randomVoiceSampling: rawType == "fish_drama3" ? true : nil,
+                voiceCloneRequirements: rawType == "fish_drama3" ? .init(
+                    minimumDuration: 3, recommendedMinimumDuration: 5,
+                    recommendedMaximumDuration: 15, maximumDuration: 30,
+                    transcriptRequired: true
+                ) : nil
             ),
-            playbackMode: progressive ? .progressive : .buffered,
+            playbackMode: rawType == "fish_drama3" ? .adaptive : progressive ? .progressive : .buffered,
             files: manifest,
             estimatedDiskBytes: max(diskBytes, 1),
             estimatedPeakMemoryBytes: max(diskBytes * 2, 1_000_000_000),
@@ -251,7 +286,8 @@ actor CommunityModelResolver {
                 requiresAcceptance: true
             ),
             stability: referenceOnly ? .unavailable : .experimental,
-            testedMLXAudioVersion: "0.1.3",
+            testedMLXAudioVersion: rawType == "fish_drama3"
+                ? "624fd54 + DramaTTS 3.2.1" : "0.1.3",
             testedDate: "Local model — not tested"
         )
     }

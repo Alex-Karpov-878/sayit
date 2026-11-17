@@ -67,6 +67,20 @@ The build therefore does **not** establish a verified, runnable app bundle.
 The temporary, exact-revision CudaBuild plugin approval used for that build was
 removed afterward. No blanket validation bypass was used.
 
+## Upstream v0.2.3 merge (2026-11-18)
+
+See [upstream-sync.md](upstream-sync.md) for the full dependency vetting and
+security review. Hardening-relevant changes:
+
+- The `sayit` CLI no longer has the App Sandbox entitlement. Upstream removed it
+  so `speak --output` can write WAV files to user-chosen paths. Export writes
+  refuse to overwrite and stage through a temporary file. Restore
+  `com.apple.security.app-sandbox` in `Config/SayItCLI.entitlements` and
+  `project.yml` to revert, at the cost of `--output`.
+- Playback-less synthesis now honors the history opt-in like normal playback.
+- Preset voice names that look like paths or URLs are rejected before reaching
+  model loaders.
+
 ## Remaining limits
 
 See [SECURITY.md](../SECURITY.md) for the threat model. The main app and selected-text

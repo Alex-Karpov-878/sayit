@@ -14,7 +14,7 @@ struct TextCleanupRegressionTests {
         #expect(chunks.count == 4)
         #expect(chunks[0].text == "🍞 Bread")
         #expect(chunks[1].text == "wrapped detail")
-        #expect(chunks[2].text == "牛乳 → コップ")
+        #expect(chunks[2].text == "牛乳 to コップ")
         #expect(!offsets.contains(chunks[1].sourceRange.lowerBound))
         for chunk in chunks {
             #expect(String(result.text.dropFirst(chunk.sourceRange.lowerBound).prefix(chunk.sourceRange.count)) == chunk.text)
@@ -71,7 +71,9 @@ struct TextCleanupRegressionTests {
         let result = try await TextCleaner().ingest(
             .init(source: .selection, plainText: input)
         )
-        let spokenItems = items
+        let spokenItems = [
+            "Selected text to speech through a configurable global shortcut."
+        ] + items.dropFirst()
         let expected = ([heading] + spokenItems + [ending])
             .joined(separator: "\n")
         #expect(result.text == expected)
@@ -196,18 +198,25 @@ struct TextCleanupRegressionTests {
         #expect(decoded.listItemStartOffsets == nil)
     }
 
-    @Test("Arrows remain language neutral", arguments: [
-        "Selected text → speech", "Text→speech", "設定 → 音声", "Texte → voix",
-        "x → y", "→", "Text →\u{FE0F} speech", "Text →\u{FE0E} speech"
+    @Test("Right arrows become spoken transitions", arguments: [
+        (
+            "Selected text → speech through a configurable global shortcut.",
+            "Selected text to speech through a configurable global shortcut."
+        ),
+        ("Text→speech", "Text to speech"),
+        ("Settings → Voices → Preview", "Settings to Voices to Preview"),
+        ("Text →\u{FE0F} speech", "Text to speech"),
+        ("Text →\u{FE0E} speech", "Text to speech"),
+        ("x → y; x - y; -42; +3", "x to y; x - y; -42; +3")
     ])
-    func preservesArrows(text: String) async throws {
+    func speaksRightArrows(example: (String, String)) async throws {
         let result = try await TextCleaner().ingest(
-            .init(source: .selection, plainText: text)
+            .init(source: .selection, plainText: example.0)
         )
-        #expect(result.text == text)
+        #expect(result.text == example.1)
     }
 
-    @Test("Right-arrow preservation respects cleanup opt-outs", arguments: [
+    @Test("Right-arrow replacement respects cleanup opt-outs", arguments: [
         TextCleaningOptions(stripSpecialCharacters: false), TextCleaningOptions(isEnabled: false)
     ])
     func preservesArrowOptOut(options: TextCleaningOptions) async throws {
@@ -218,7 +227,7 @@ struct TextCleanupRegressionTests {
         #expect(result.text == input)
     }
 
-    @Test("Arrow preservation preserves list pause offsets for Markdown and HTML", arguments: [true, false])
+    @Test("Arrow replacement preserves list pause offsets for Markdown and HTML", arguments: [true, false])
     func arrowListOffsets(html: Bool) async throws {
         let payload: TextSourcePayload
         if html {
@@ -235,23 +244,23 @@ struct TextCleanupRegressionTests {
             )
         }
         let result = try await TextCleaner().ingest(payload)
-        #expect(result.text == "Text → speech\nNext item")
-        #expect(result.listItemStartOffsets == [0, 14])
+        #expect(result.text == "Text to speech\nNext item")
+        #expect(result.listItemStartOffsets == [0, 15])
         let chunks = TextChunker().chunks(
             for: result.text,
             listItemStartOffsets: Set(result.listItemStartOffsets ?? [])
         )
-        #expect(chunks.map(\.text) == ["Text → speech", "Next item"])
+        #expect(chunks.map(\.text) == ["Text to speech", "Next item"])
     }
 
-    @Test("Arrow preservation is independent of whitespace and Markdown cleanup")
+    @Test("Arrow replacement is independent of whitespace and Markdown cleanup")
     func arrowCleanupOptions() async throws {
         let result = try await TextCleaner(
             options: .init(stripMarkdown: false, normalizeWhitespace: false)
         ).ingest(
             .init(source: .selection, plainText: "Text→speech\nNext   line")
         )
-        #expect(result.text == "Text→speech\nNext   line")
+        #expect(result.text == "Text to speech\nNext   line")
     }
 
     @Test("Standalone inline Markdown is recognized", arguments: [
